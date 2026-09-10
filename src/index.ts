@@ -7,6 +7,27 @@
 export { Leash, LeashDenied } from './leash.js';
 export type { ApprovalHandler, LeashOptions } from './leash.js';
 
+export {
+  wrapTool,
+  wrapTools,
+  guardToolUse,
+  guardOpenAIToolCall,
+  meterAnthropicUsage,
+  meterOpenAIUsage,
+} from './adapters/sdk.js';
+export type {
+  AnthropicUsage,
+  GuardedHandler,
+  OpenAIToolCall,
+  OpenAIToolMessage,
+  OpenAIUsage,
+  TextBlock,
+  ToolErrorResult,
+  ToolHandler,
+  ToolResultBlock,
+  ToolUseBlock,
+} from './adapters/sdk.js';
+
 export { evaluate } from './policy/engine.js';
 export { loadPolicyFile, parsePolicy, validatePolicy, PolicyError } from './policy/load.js';
 export { matchesGlob, resolvePath } from './policy/match.js';

@@ -11,6 +11,7 @@
   },
   "exports": {
     ".": "./dist/index.js",
+    "./sdk": "./dist/adapters/sdk.js",
     "./mcp": "./dist/adapters/mcp-proxy.js"
   },
   "files": [

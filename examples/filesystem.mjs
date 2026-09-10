@@ -88,4 +88,4 @@ console.log(`  ${allowed} allowed, ${refused} refused`);
 console.log(`  budget: ${usage.calls} calls  ${usage.tokens.toLocaleString('en-US')} tokens  $${usage.usd.toFixed(4)}`);
 console.log(`  audit:  ${auditFile}`);
 console.log(`          ${verified.count} entries, chain ${verified.ok ? 'intact' : 'BROKEN'}, head ${leash.head().slice(0, 16)}`);
-console.log(`  verify: node -e "import('./dist/index.js').then(m=>console.log(m.verifyFile('${auditFile}')))"\n`);
+console.log(`  verify: node dist/cli.js verify ${auditFile}\n`);
