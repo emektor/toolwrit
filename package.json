@@ -1,0 +1,47 @@
+{
+  "name": "leash",
+  "version": "0.1.0",
+  "description": "A deterministic leash for AI agents. Allowlist the tools, cap the budget, prove what happened.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "leash": "./dist/cli.js"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./mcp": "./dist/adapters/mcp-proxy.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "guardrails",
+    "mcp",
+    "tool-calling",
+    "policy",
+    "audit",
+    "llm",
+    "security"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "yaml": "^2.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5"
+  }
+}
