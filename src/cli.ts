@@ -6,18 +6,21 @@
  * already run, without editing anything?". `leash run --policy p.yaml -- <cmd>`
  * is that story: a prefix on an existing MCP server command. The other
  * subcommands exist so a policy can be reviewed (`explain`), tested in CI
- * (`check`) and defended afterwards (`verify`) without writing any code.
+ * (`check`) and defended afterwards (`verify`, `receipt`, `anchor`) without
+ * writing any code.
  *
  * Argument parsing is hand-rolled because a security tool with a dependency
  * tree is a harder sell than one without, and this grammar is small enough to
  * fit in a page.
  */
 
-import { readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createMcpProxy } from './adapters/mcp-proxy.js';
-import { verifyFile } from './audit/verify.js';
+import type { AuditEntry } from './audit/chain.js';
+import { summarize, verifyAgainstReceipt, type RunReceipt } from './audit/receipt.js';
+import { verifyChain, verifyFile, type VerifyResult } from './audit/verify.js';
 import { Leash } from './leash.js';
 import { loadPolicyFile } from './policy/load.js';
 import type { ArgConstraint, Decision, Policy } from './types.js';
@@ -26,17 +29,33 @@ const USAGE = `leash — a deterministic leash for AI agents.
 
 Usage:
   leash run     --policy <file> [--audit <file>] [--run <id>] -- <command> [args...]
-  leash verify  <audit.jsonl>
+  leash verify  <audit.jsonl> [--against <anchor.jsonl>]
+  leash receipt <audit.jsonl> [--json]
+  leash anchor  <audit.jsonl> --to <anchor.jsonl>
   leash check   --policy <file> --tool <name> [--args <json>]
   leash explain --policy <file>
 
 Options:
   --help       Show this text.
   --version    Print the leash version.
+  --against    Check the log's head against the receipt anchored for this run.
+  --json       Print the receipt as one JSON object instead of prose.
+  --to         Anchor file to append the receipt to.
+
+Anchoring:
+  A chain verifies against itself, so a truncated log still passes: a prefix of
+  a valid chain is a valid chain. "leash anchor" writes one receipt line —
+  including the head — to an append-only file, and "leash verify --against"
+  checks the log still reaches that head. The anchor is only worth anything
+  somewhere the agent cannot reach it (another host, an object store with
+  append-only retention, a colleague's inbox). Leash cannot enforce that; it
+  can only make putting it there one command.
 
 Exit codes:
   run      0 when the downstream server exits cleanly.
-  verify   0 when the chain is intact, 1 when it is not.
+  verify   0 when every requested check passes, 1 when any fails.
+  receipt  0 when the chain verifies, 1 when it does not.
+  anchor   0 when the receipt was appended, 1 when the chain does not verify.
   check    0 allow, 1 deny, 2 ask.
 `;
 
@@ -53,6 +72,9 @@ interface ParsedArgs {
  * `--` is a hard stop: the remainder is the downstream command line and must
  * never be interpreted, or a server's own `--policy` flag would be stolen.
  */
+/** Flags that are on/off switches and therefore never consume the next token. */
+const BOOLEAN_FLAGS = new Set(['json', 'help', 'version']);
+
 function parseArgs(argv: readonly string[]): ParsedArgs {
   const flags = new Map<string, string>();
   const positional: string[] = [];
@@ -71,8 +93,11 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
         flags.set(body.slice(0, eq), body.slice(eq + 1));
         continue;
       }
+      // Only value-taking flags swallow the next token. Without this a
+      // boolean flag written before a positional eats it, so
+      // `leash receipt --json audit.jsonl` would lose the filename.
       const next = argv[i + 1];
-      if (next !== undefined && !next.startsWith('--')) {
+      if (!BOOLEAN_FLAGS.has(body) && next !== undefined && !next.startsWith('--')) {
         flags.set(body, next);
         i++;
       } else {
@@ -108,6 +133,10 @@ function main(): void | Promise<void> {
       return cmdRun(parsed);
     case 'verify':
       return cmdVerify(parsed);
+    case 'receipt':
+      return cmdReceipt(parsed);
+    case 'anchor':
+      return cmdAnchor(parsed);
     case 'check':
       return cmdCheck(parsed);
     case 'explain':
@@ -154,27 +183,198 @@ function cmdVerify(parsed: ParsedArgs): void {
   const file = parsed.positional[1];
   if (!file) throw new CliError('verify needs an audit file, e.g. `leash verify audit.jsonl`');
 
-  let result;
-  try {
-    result = verifyFile(file);
-  } catch (err) {
-    throw new CliError(`cannot read audit file ${file} (${(err as Error).message})`);
-  }
+  const anchorFile = parsed.flags.get('against');
+  if (anchorFile === undefined || anchorFile === 'true') {
+    let result;
+    try {
+      result = verifyFile(file);
+    } catch (err) {
+      throw new CliError(`cannot read audit file ${file} (${(err as Error).message})`);
+    }
 
-  if (result.ok) {
-    process.stdout.write(`ok: ${result.count} entr${result.count === 1 ? 'y' : 'ies'} verified\n`);
-    process.stdout.write(`head: ${result.head}\n`);
+    if (result.ok) {
+      process.stdout.write(`ok: ${result.count} entr${result.count === 1 ? 'y' : 'ies'} verified\n`);
+      process.stdout.write(`head: ${result.head}\n`);
+      return;
+    }
+
+    reportFailure('audit chain is not intact', result);
+    process.exitCode = 1;
     return;
   }
 
+  // Two checks, reported separately: the chain check says the file was not
+  // edited, the anchor check says nothing was cut off the end of it. Only the
+  // second one can catch a truncation, so it must never be folded into the
+  // first — an operator has to see which of the two failed.
+  const entries = readEntries(file);
+  const chain = verifyChain(entries);
+  if (!chain.ok) {
+    reportFailure('chain check — audit chain is not intact', chain);
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write(
+    `ok: chain check — ${chain.count} entr${chain.count === 1 ? 'y' : 'ies'} verified\n`
+  );
+
+  const run = summarize(entries).run;
+  const receipt = findReceipt(anchorFile, run);
+  if (!receipt) {
+    process.stderr.write(
+      `FAILED: anchor check — no receipt for run "${run}" in ${anchorFile}\n` +
+        '  detail: an unanchored run cannot be shown to be complete\n'
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const against = verifyAgainstReceipt(entries, receipt);
+  if (!against.ok) {
+    reportFailure('anchor check — log does not match the anchored receipt', against);
+    process.exitCode = 1;
+    return;
+  }
+
+  process.stdout.write(`ok: anchor check — head matches the receipt anchored for run ${run}\n`);
+  process.stdout.write(`head: ${against.head}\n`);
+}
+
+function reportFailure(headline: string, result: VerifyResult): void {
+  process.stderr.write(`FAILED: ${headline} (${result.count} entries read)\n`);
   const failure = result.failure;
-  process.stderr.write(`FAILED: audit chain is not intact (${result.count} entries read)\n`);
   if (failure) {
     process.stderr.write(`  seq:    ${failure.seq}\n`);
     process.stderr.write(`  reason: ${failure.reason}\n`);
     process.stderr.write(`  detail: ${failure.detail}\n`);
   }
-  process.exitCode = 1;
+}
+
+function cmdReceipt(parsed: ParsedArgs): void {
+  const file = parsed.positional[1];
+  if (!file) throw new CliError('receipt needs an audit file, e.g. `leash receipt audit.jsonl`');
+
+  const receipt = summarize(readEntries(file));
+  if (parsed.flags.get('json') !== undefined) {
+    process.stdout.write(`${JSON.stringify(receipt)}\n`);
+  } else {
+    process.stdout.write(renderReceipt(receipt));
+  }
+
+  // A receipt over a broken chain is still worth printing — it says what the
+  // file claims — but it must not exit 0, or a CI step would accept it.
+  if (!receipt.chainOk) process.exitCode = 1;
+}
+
+function cmdAnchor(parsed: ParsedArgs): void {
+  const file = parsed.positional[1];
+  if (!file) throw new CliError('anchor needs an audit file, e.g. `leash anchor audit.jsonl --to anchors.jsonl`');
+  const target = requireFlag(parsed, 'to');
+
+  const receipt = summarize(readEntries(file));
+  if (!receipt.chainOk) {
+    process.stderr.write(`FAILED: refusing to anchor ${file} — its chain does not verify\n`);
+    process.exitCode = 1;
+    return;
+  }
+
+  try {
+    mkdirSync(dirname(target), { recursive: true });
+    appendFileSync(target, `${JSON.stringify(receipt)}\n`, 'utf8');
+  } catch (err) {
+    throw new CliError(`cannot append to anchor file ${target} (${(err as Error).message})`);
+  }
+
+  process.stdout.write(`anchored run ${receipt.run} (head ${receipt.head}) to ${target}\n`);
+  process.stdout.write(
+    'note: an anchor only proves anything where the agent cannot rewrite it.\n'
+  );
+}
+
+/** Read a JSONL audit file into entries, failing loudly rather than skipping lines. */
+function readEntries(file: string): AuditEntry[] {
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (err) {
+    throw new CliError(`cannot read audit file ${file} (${(err as Error).message})`);
+  }
+
+  const lines = text.split('\n').filter((line) => line.trim().length > 0);
+  return lines.map((line, i) => {
+    try {
+      return JSON.parse(line) as AuditEntry;
+    } catch (err) {
+      throw new CliError(`${file} line ${i + 1} is not valid JSON (${(err as Error).message})`);
+    }
+  });
+}
+
+/**
+ * Find the receipt for `run` in an append-only anchor file.
+ *
+ * The last matching line wins: anchoring the same run twice (mid-run, then at
+ * the end) is normal, and the newest receipt is the strongest claim about how
+ * far the chain got.
+ */
+function findReceipt(anchorFile: string, run: string): RunReceipt | null {
+  let text: string;
+  try {
+    text = readFileSync(anchorFile, 'utf8');
+  } catch (err) {
+    throw new CliError(`cannot read anchor file ${anchorFile} (${(err as Error).message})`);
+  }
+
+  let found: RunReceipt | null = null;
+  for (const [i, line] of text.split('\n').entries()) {
+    if (line.trim().length === 0) continue;
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch (err) {
+      throw new CliError(`${anchorFile} line ${i + 1} is not valid JSON (${(err as Error).message})`);
+    }
+    const receipt = value as RunReceipt;
+    if (typeof receipt?.run === 'string' && receipt.run === run) found = receipt;
+  }
+  return found;
+}
+
+function renderReceipt(r: RunReceipt): string {
+  const out: string[] = [];
+  out.push(`run:      ${r.run || '(empty chain)'}`);
+  out.push(`entries:  ${r.entryCount}${r.from !== null ? `  ${iso(r.from)} → ${iso(r.to ?? r.from)}` : ''}`);
+  out.push(`chain:    ${r.chainOk ? 'ok' : 'FAILED — does not verify'}`);
+  out.push(`head:     ${r.head}`);
+
+  if (r.plan) {
+    out.push(`purpose:  ${r.plan.purpose}${r.plan.approvedBy ? ` (approved by ${r.plan.approvedBy})` : ''}`);
+  }
+
+  out.push(`usage:    ${r.usage.calls} calls, ${r.usage.tokens} tokens, $${r.usage.usd.toFixed(4)}`);
+  if (r.consumed) {
+    const parts = Object.entries(r.consumed).map(
+      ([dimension, fraction]) => `${dimension} ${Math.round(fraction * 100)}%`
+    );
+    out.push(`budget:   ${parts.length > 0 ? parts.join(', ') : '(none)'} of the approved envelope`);
+  }
+
+  out.push(`outcome:  ${r.allowed} allowed, ${r.denied} denied, ${r.asked} asked`);
+  if (r.warnings.length > 0) {
+    const fired = r.warnings.map((w) => `${w.dimension} at ${Math.round(w.threshold * 100)}%`);
+    out.push(`warnings: ${fired.join(', ')}`);
+  }
+  const denied = Object.entries(r.deniedTools);
+  if (denied.length > 0) {
+    out.push(`denied:   ${denied.map(([tool, n]) => `${tool} ×${n}`).join(', ')}`);
+  }
+  out.push(`exceeded: ${r.exceeded ? 'YES — the run hit a budget ceiling' : 'no'}`);
+
+  return `${out.join('\n')}\n`;
+}
+
+function iso(ms: number): string {
+  return new Date(ms).toISOString();
 }
 
 function cmdCheck(parsed: ParsedArgs): void {

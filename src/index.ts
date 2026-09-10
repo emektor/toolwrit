@@ -39,6 +39,8 @@ export { AuditLog, canonicalize, hashEntry, GENESIS } from './audit/chain.js';
 export type { AuditEntry, AuditLogOptions } from './audit/chain.js';
 export { verifyChain, verifyFile } from './audit/verify.js';
 export type { VerifyResult } from './audit/verify.js';
+export { summarize, verifyAgainstReceipt } from './audit/receipt.js';
+export type { ReceiptConsumed, ReceiptPlan, ReceiptWarning, RunReceipt } from './audit/receipt.js';
 
 export type {
   ArgConstraint,
