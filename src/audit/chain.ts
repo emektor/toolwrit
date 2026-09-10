@@ -125,11 +125,12 @@ function redactArgs(
   args: Record<string, unknown>,
   paths: readonly string[]
 ): Record<string, unknown> {
-  if (paths.length === 0) return args;
-
-  // Structured clone keeps the caller's object untouched: the agent may still
-  // need the real argument value after the decision is recorded.
+  // Always clone, even with nothing to redact. Holding the caller's object by
+  // reference would let a later mutation of it change what this entry hashes
+  // to, silently invalidating an otherwise honest chain. The clone also keeps
+  // the caller's object untouched: the agent may still need the real value.
   const clone = structuredClone(args) as Record<string, unknown>;
+  if (paths.length === 0) return clone;
   for (const path of paths) {
     const segments = path.split('.');
     const leaf = segments.pop();
@@ -140,7 +141,14 @@ function redactArgs(
       if (typeof cursor !== 'object' || cursor === null) break;
       cursor = (cursor as Record<string, unknown>)[segment];
     }
-    if (typeof cursor === 'object' && cursor !== null && leaf in (cursor as object)) {
+    // hasOwnProperty, not `in`: a redaction path naming a prototype key such as
+    // "constructor" must be a no-op rather than adding an own property that was
+    // never in the arguments.
+    if (
+      typeof cursor === 'object' &&
+      cursor !== null &&
+      Object.prototype.hasOwnProperty.call(cursor, leaf)
+    ) {
       (cursor as Record<string, unknown>)[leaf] = '[redacted]';
     }
   }

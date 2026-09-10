@@ -482,4 +482,31 @@ describe('AuditLog: redaction', () => {
     const entry = log.record(call('t', { token: 'visible' }, T0), ALLOW, { calls: 0, tokens: 0, usd: 0 });
     assert.equal(entry.args['token'], 'visible');
   });
+
+  it('a recorded entry is insulated from later mutation of the caller\'s args', () => {
+    // Holding the caller's object by reference would let an agent that reuses
+    // its argument object silently invalidate an honest chain: the entry would
+    // hash to something the log no longer contains. Tested with no redaction
+    // configured, which is the path that used to skip the clone.
+    for (const redact of [[], ['other']]) {
+      const log = new AuditLog({ run: 'r', redact });
+      const args: Record<string, unknown> = { path: '/tmp/ok', nested: { deep: 1 } };
+      log.record(call('fs.read', args, T0), ALLOW, { calls: 0, tokens: 0, usd: 0 });
+
+      args['path'] = '/etc/passwd';
+      (args['nested'] as Record<string, unknown>)['deep'] = 999;
+
+      const [entry] = log.all();
+      assert.equal(entry?.args['path'], '/tmp/ok');
+      assert.deepEqual(entry?.args['nested'], { deep: 1 });
+      assert.equal(verifyChain(log.all()).ok, true);
+    }
+  });
+
+  it('a redaction path naming a prototype key adds nothing to the entry', () => {
+    const log = new AuditLog({ run: 'r', redact: ['constructor', 'toString'] });
+    const entry = log.record(call('t', { real: 1 }, T0), ALLOW, { calls: 0, tokens: 0, usd: 0 });
+    assert.deepEqual(Object.keys(entry.args), ['real']);
+    assert.equal(verifyChain([entry]).ok, true);
+  });
 });

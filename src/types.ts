@@ -88,7 +88,12 @@ export interface PolicyRule {
   description?: string;
   /**
    * Tool name globs this rule applies to. `*` matches any run of characters
-   * except `.` and `/`; `**` matches anything. A bare `*` means "every tool".
+   * except `.` and `/`; `**` matches anything, separators included.
+   *
+   * So `**` is the match-every-tool pattern. A bare `*` matches only names
+   * with no separator in them — it does NOT match "fs.read". Reach for `**`
+   * when you mean "everything", particularly on a deny rule, where a glob
+   * that under-matches leaves a hole rather than failing closed.
    */
   tools: string[];
   effect: Effect;

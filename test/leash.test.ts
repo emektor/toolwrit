@@ -13,6 +13,7 @@
 
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Leash, LeashDenied } from '../src/leash.js';
 import { verifyChain, verifyFile } from '../src/audit/verify.js';
@@ -350,7 +351,7 @@ describe('Leash: metering and budgets', () => {
 
   it('the seconds budget trips on the injected clock alone', async () => {
     const p: Policy = { ...ALLOW_FS, budget: { seconds: 30 } };
-    // Two clock reads per guard (toCall, then countCall reuses call.at).
+    // One clock read per guard: countCall reuses the timestamp from the call.
     const l = new Leash({ policy: p, now: fixedClock(at(0), at(29), at(30)) });
     await l.guard('fs.read', { path: '/tmp/a' }, () => 1);
     await l.guard('fs.read', { path: '/tmp/b' }, () => 1);
@@ -420,14 +421,16 @@ describe('Leash: audit chain over a whole run', () => {
     });
 
     await l.guard('api.call', args, () => 1);
-    await denied(() => l.guard('api.call', args, () => 1).then(() => { throw new Error('unreachable'); }).catch((e) => { throw e; }))
-      .catch(() => undefined); // the second call is allowed too; see below
+    await l.guard('api.call', args, () => 2);
 
     const result = verifyFile(file);
     assert.equal(result.ok, true, JSON.stringify(result.failure));
+    assert.equal(result.count, 2);
     assert.equal(result.head, l.head());
     assert.equal(l.entries()[0]!.args['token'], '[redacted]');
+    assert.equal(l.entries()[0]!.args['path'], '/tmp/x');
     assert.equal(args.token, 'sk-live-secret', 'the caller\'s object is untouched');
+    assert.ok(!readFileSync(file, 'utf8').includes('sk-live-secret'), 'the secret never reaches disk');
   });
 
   it('two Leash instances with the same inputs produce the same chain', async () => {

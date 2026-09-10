@@ -34,7 +34,10 @@ function checkOne(
 ): Violation[] {
   const v = (constraint: string, message: string): Violation => ({ rule, path, constraint, message });
 
-  if (value === MISSING) {
+  // An own property explicitly set to undefined is indistinguishable from an
+  // absent one for policy purposes, and treating it as present would let
+  // `{ path: undefined }` satisfy a required, scoped constraint.
+  if (value === MISSING || value === undefined) {
     if (c.optional) return [];
     return [v('required', `argument "${path}" is required but was not provided`)];
   }
@@ -44,6 +47,43 @@ function checkOne(
   if (c.type && !isType(value, c.type)) {
     // A type mismatch makes every downstream check meaningless, so stop here.
     return [v('type', `argument "${path}" must be a ${c.type}, got ${describe(value)}`)];
+  }
+
+  // Constraints below are type-specific. Skipping one because the value has an
+  // unexpected type would fail OPEN: `startsWith: ["/tmp/"]` would be satisfied
+  // by the array ["/etc/passwd"], and the rule would still match and allow the
+  // call. `args` is untrusted model output, so a wrong type is a violation.
+  const stringConstraints = presentKeys(c, ['matches', 'startsWith', 'excludes', 'urlHosts']);
+  const numberConstraints = presentKeys(c, ['min', 'max']);
+  const lengthConstraints = presentKeys(c, ['minLength', 'maxLength']);
+
+  const isString = typeof value === 'string';
+  const isNumber = typeof value === 'number';
+  const hasLength = lengthOf(value) !== null;
+
+  if (stringConstraints.length > 0 && !isString) {
+    out.push(
+      v(
+        'type',
+        `argument "${path}" must be a string to be checked against ${list(stringConstraints)}, got ${describe(value)}`
+      )
+    );
+  }
+  if (numberConstraints.length > 0 && !isNumber) {
+    out.push(
+      v(
+        'type',
+        `argument "${path}" must be a number to be checked against ${list(numberConstraints)}, got ${describe(value)}`
+      )
+    );
+  }
+  if (lengthConstraints.length > 0 && !hasLength) {
+    out.push(
+      v(
+        'type',
+        `argument "${path}" must be a string or array to be checked against ${list(lengthConstraints)}, got ${describe(value)}`
+      )
+    );
   }
 
   if (c.oneOf && !c.oneOf.some((allowed) => deepEqual(allowed, value))) {
@@ -101,6 +141,15 @@ function checkOne(
   }
 
   return out;
+}
+
+/** Which of `keys` the author actually set on this constraint. */
+function presentKeys(c: ArgConstraint, keys: readonly (keyof ArgConstraint)[]): string[] {
+  return keys.filter((key) => c[key] !== undefined) as string[];
+}
+
+function list(names: readonly string[]): string {
+  return names.map((n) => `"${n}"`).join(', ');
 }
 
 function isType(value: unknown, type: NonNullable<ArgConstraint['type']>): boolean {

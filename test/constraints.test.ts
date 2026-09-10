@@ -296,10 +296,13 @@ describe('checkArgs: minLength / maxLength', () => {
     assert.deepEqual(check({ maxLength: 0 }, { x: '' }), []);
   });
 
-  it('length bounds do not apply to objects, numbers or booleans', () => {
-    assert.deepEqual(check({ maxLength: 0 }, { x: { a: 1, b: 2 } }), []);
-    assert.deepEqual(check({ maxLength: 0 }, { x: 12345 }), []);
-    assert.deepEqual(check({ minLength: 5 }, { x: true }), []);
+  it('rejects a value that has no length rather than skipping the bound', () => {
+    // Skipping the check would fail OPEN: the constraint would be satisfied,
+    // the rule would match, and the call would be allowed. A value of the
+    // wrong type is a violation, not a reason to stop looking.
+    assert.deepEqual(names(check({ maxLength: 0 }, { x: { a: 1, b: 2 } })), ['type']);
+    assert.deepEqual(names(check({ maxLength: 0 }, { x: 12345 })), ['type']);
+    assert.deepEqual(names(check({ minLength: 5 }, { x: true })), ['type']);
   });
 
   it('maxLength and minLength can be combined into an exact length', () => {
