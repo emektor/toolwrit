@@ -187,7 +187,16 @@ export async function guardOpenAIToolCall(
       // policy says — we have no arguments to hand the tool.
       await leash.guard(name, { _rawArguments: raw }, () => text);
     } catch (err) {
-      if (err instanceof LeashDenied) return { role: 'tool', tool_call_id: toolCall.id, content: denialText(err) };
+      // The policy almost always refuses this (the arguments it wanted to check
+      // are not there), but the model needs to hear about the broken JSON, not
+      // about the constraints that could not be evaluated because of it.
+      if (err instanceof LeashDenied) {
+        return {
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: `${text}\n(audit ${err.auditHash.slice(0, 12)}) Re-emit the arguments as valid JSON.`,
+        };
+      }
       throw err;
     }
     return { role: 'tool', tool_call_id: toolCall.id, content: text };
@@ -240,6 +249,9 @@ function toolResult(id: string, text: string, isError: boolean): ToolResultBlock
 function denialText(err: LeashDenied): string {
   const lines = [`tool "${err.tool}" was refused by policy: ${err.decision.reason}`];
   for (const violation of err.decision.violations) {
+    // A blanket deny rule reports its description as both the reason and the
+    // single violation; repeating it back to the model teaches nothing.
+    if (violation.message === err.decision.reason) continue;
     lines.push(`- ${violation.message}`);
   }
   lines.push(`(audit ${err.auditHash.slice(0, 12)}) Do not retry this call unchanged.`);
