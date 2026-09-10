@@ -1,0 +1,1 @@
+"""Run-scoped consumption tracking."""
