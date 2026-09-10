@@ -1,0 +1,87 @@
+# Policy for a customer-support agent with CRM and email tools.
+#
+# The interesting effect here is `ask`: refunds are not a binary. Small ones are
+# routine, large ones want a human, and very large ones are simply not something
+# an agent should be able to do at 3am no matter who approves.
+
+version: "1"
+name: support-agent
+default: deny
+
+budget:
+  calls: 120
+  tokens: 400000
+  usd: 2.50
+
+rules:
+  - id: crm.lookup
+    description: look a customer up by id or email
+    tools: [crm.lookup_customer]
+    effect: allow
+    when:
+      query:
+        type: string
+        minLength: 3
+        maxLength: 200
+
+  - id: crm.ticket
+    description: open a support ticket
+    tools: [crm.create_ticket]
+    effect: allow
+    when:
+      subject:
+        type: string
+        minLength: 3
+        maxLength: 200
+      body:
+        type: string
+        maxLength: 5000
+
+  - id: crm.refund.auto
+    description: refunds up to $50 are routine
+    tools: [crm.issue_refund]
+    effect: allow
+    when:
+      amount:
+        type: number
+        min: 0
+        max: 50
+
+  # Bounds are inclusive, so exactly $50.00 is auto-approved by the rule above
+  # and anything above it lands here. Deny beats ask, so a $900 refund is
+  # refused outright even though this rule also matches it.
+  - id: crm.refund.approval
+    description: refunds over $50 need a human
+    tools: [crm.issue_refund]
+    effect: ask
+    when:
+      amount:
+        type: number
+        min: 50
+
+  - id: crm.refund.ceiling
+    description: refunds of $500 or more are never issued by an agent
+    tools: [crm.issue_refund]
+    effect: deny
+    when:
+      amount:
+        type: number
+        min: 500
+
+  # Outbound mail is the one tool here with reach outside the company, so the
+  # recipient is pinned to the corporate domain with an anchored regex and the
+  # rate limit is tight enough that a loop cannot become a mail storm.
+  - id: email.internal
+    description: mail internal addresses only
+    tools: [email.send]
+    effect: allow
+    when:
+      to:
+        type: string
+        matches: '^[A-Za-z0-9._%+-]+@(support\.)?example\.com$'
+      subject:
+        type: string
+        maxLength: 200
+    limit:
+      max: 5
+      perSeconds: 60

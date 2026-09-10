@@ -1,0 +1,79 @@
+# Policy for a coding agent with filesystem and shell tools.
+#
+# The shape to notice: reads are wide, writes are narrow, deletes do not exist,
+# and the shell is an allowlist of literal command strings rather than a
+# pattern. Anything not named here is refused, because `default` is deny.
+
+version: "1"
+name: coding-agent
+default: deny
+
+budget:
+  calls: 200
+  tokens: 2000000
+  usd: 5.00
+
+rules:
+  # Reading is the agent's main way of orienting itself, so it is allowed
+  # anywhere in the checkout — but only inside it. "./" pins the path to the
+  # project root and "excludes" stops the obvious way back out of it.
+  - id: fs.read.project
+    description: read any project-relative file
+    tools: [fs.read]
+    effect: allow
+    when:
+      path:
+        type: string
+        startsWith: ["./"]
+        excludes: [".."]
+        maxLength: 4096
+
+  # Listed before the allow rule for readability only: the engine resolves
+  # deny-beats-allow regardless of order. Having a named deny rule means the
+  # refusal message says "traversal or secrets" instead of "no rule matched".
+  - id: fs.write.forbidden
+    description: writes may not traverse out of the tree or touch env files
+    tools: [fs.write]
+    effect: deny
+    when:
+      path:
+        type: string
+        matches: '(\.\.|\.env)'
+
+  - id: fs.write.source
+    description: write only inside ./src and ./test
+    tools: [fs.write]
+    effect: allow
+    when:
+      path:
+        type: string
+        startsWith: ["./src/", "./test/"]
+        excludes: ["..", ".env"]
+        maxLength: 4096
+      content:
+        type: string
+
+  # Deleting is never worth the blast radius for an unattended agent: let it
+  # write an empty file and let a human remove the file in review.
+  - id: fs.delete.never
+    description: this agent may not delete files
+    tools: [fs.delete]
+    effect: deny
+
+  # A literal allowlist. `oneOf` is exact-match, so "npm test --", "npm test &&
+  # curl ..." and every other bit of shell creativity fall through to deny.
+  - id: shell.exec.allowlist
+    description: only the four commands this agent actually needs
+    tools: [shell.exec]
+    effect: allow
+    when:
+      command:
+        type: string
+        oneOf:
+          - "npm test"
+          - "npm run build"
+          - "git status"
+          - "git diff"
+    limit:
+      max: 10
+      perSeconds: 60
