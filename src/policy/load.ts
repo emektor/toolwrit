@@ -18,7 +18,8 @@ export class PolicyError extends Error {
 }
 
 const EFFECTS = new Set(['allow', 'deny', 'ask']);
-const POLICY_KEYS = new Set(['version', 'name', 'default', 'budget', 'rules']);
+const POLICY_KEYS = new Set(['version', 'name', 'default', 'budget', 'plan', 'rules']);
+const PLAN_KEYS = new Set(['purpose', 'approvedBy', 'warnAt']);
 const RULE_KEYS = new Set(['id', 'description', 'tools', 'effect', 'when', 'limit']);
 const BUDGET_KEYS = new Set(['calls', 'tokens', 'usd', 'seconds']);
 const LIMIT_KEYS = new Set(['max', 'perSeconds']);
@@ -86,6 +87,47 @@ export function validatePolicy(doc: unknown, source = 'policy'): Policy {
       }
     }
     policy.budget = budget as Policy['budget'];
+  }
+
+  if (root.plan !== undefined) {
+    const plan = requireObject(root.plan, `${source}.plan`);
+    rejectUnknownKeys(plan, PLAN_KEYS, `${source}.plan`);
+
+    if (typeof plan.purpose !== 'string' || plan.purpose.trim().length === 0) {
+      throw new PolicyError('"purpose" must be a non-empty string', `${source}.plan`);
+    }
+    if (plan.approvedBy !== undefined && typeof plan.approvedBy !== 'string') {
+      throw new PolicyError('"approvedBy" must be a string', `${source}.plan`);
+    }
+    if (plan.warnAt !== undefined) {
+      if (!Array.isArray(plan.warnAt) || plan.warnAt.length === 0) {
+        throw new PolicyError('"warnAt" must be a non-empty array', `${source}.plan`);
+      }
+      for (const t of plan.warnAt) {
+        if (typeof t !== 'number' || !(t > 0) || t > 1) {
+          throw new PolicyError(
+            '"warnAt" entries must be fractions greater than 0 and at most 1, e.g. 0.8',
+            `${source}.plan`
+          );
+        }
+      }
+    }
+    // A plan with nothing to measure against would report nothing, which reads
+    // as "all clear" rather than "not configured". Fail loudly instead.
+    if (root.budget === undefined) {
+      throw new PolicyError(
+        'a "plan" requires a "budget" to measure against; add budget limits or remove the plan',
+        source
+      );
+    }
+
+    policy.plan = {
+      purpose: plan.purpose,
+      ...(plan.approvedBy !== undefined ? { approvedBy: plan.approvedBy as string } : {}),
+      ...(plan.warnAt !== undefined
+        ? { warnAt: [...(plan.warnAt as number[])].sort((a, b) => a - b) }
+        : {}),
+    };
   }
 
   if (!Array.isArray(root.rules)) {

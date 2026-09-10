@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { AuditLog, type AuditEntry } from './audit/chain.js';
 import { Ledger, type TokenPrice } from './budget/ledger.js';
 import { evaluate } from './policy/engine.js';
-import type { Decision, Policy, ToolCall } from './types.js';
+import type { BudgetWarning, Decision, Policy, ToolCall } from './types.js';
 
 /** Thrown when a guarded call is refused. Catch this to feed the agent an error. */
 export class LeashDenied extends Error {
@@ -43,8 +43,22 @@ export interface LeashOptions {
   redact?: string[];
   /** Approval callback for "ask" rules. */
   onAsk?: ApprovalHandler;
+  /**
+   * Called when consumption crosses a warn threshold declared in the plan.
+   * Fires at most once per threshold per dimension. Keep it non-blocking —
+   * it runs inline with metering; queue the Slack post rather than awaiting it.
+   */
+  onWarn?: (warning: BudgetWarning) => void;
   /** Injectable clock. Tests pass a fixed one; production leaves it alone. */
   now?: () => number;
+}
+
+/** Warn thresholds used when a plan does not name its own. */
+const DEFAULT_WARN_AT = [0.8, 0.95];
+
+/** Readable numbers in warning text: 12500 -> "12,500", 1.5 -> "1.5". */
+function format(value: number): string {
+  return Number.isInteger(value) ? value.toLocaleString('en-US') : value.toFixed(2);
 }
 
 export class Leash {
@@ -52,6 +66,8 @@ export class Leash {
   private readonly ledger = new Ledger();
   private readonly audit: AuditLog;
   private readonly now: () => number;
+  /** "dimension:threshold" keys already reported, so each fires exactly once. */
+  private readonly warned = new Set<string>();
 
   constructor(private readonly options: LeashOptions) {
     this.run = options.run ?? randomUUID();
@@ -61,6 +77,24 @@ export class Leash {
       ...(options.auditFile ? { file: options.auditFile } : {}),
       ...(options.redact ? { redact: options.redact } : {}),
     });
+
+    // The approved envelope goes into the chain before anything can consume it.
+    // Recording it as an ordinary entry keeps the chain uniform -- one shape,
+    // one verifier -- and means an operator cannot later claim a different
+    // budget was authorised than the one the run actually started under.
+    if (options.policy.plan) {
+      const plan = options.policy.plan;
+      this.audit.record(
+        this.toCall('leash:plan', {
+          purpose: plan.purpose,
+          approvedBy: plan.approvedBy ?? null,
+          budget: options.policy.budget ?? null,
+          warnAt: plan.warnAt ?? DEFAULT_WARN_AT,
+        }),
+        { effect: 'allow', rule: 'plan', reason: 'run plan recorded', violations: [] },
+        { calls: 0, tokens: 0, usd: 0 }
+      );
+    }
   }
 
   /**
@@ -106,17 +140,72 @@ export class Leash {
     }
 
     this.ledger.countCall(call.at);
+    this.reportProgress();
     return execute();
   }
 
   /** Record model consumption against the budget. Call after every model turn. */
   meter(input: number, output: number, price?: TokenPrice): void {
     this.ledger.addUsage(input, output, price, this.now());
+    this.reportProgress();
   }
 
   /** Record non-token spend, e.g. a metered third-party API call. */
   spend(usd: number): void {
     this.ledger.addSpend(usd, this.now());
+    this.reportProgress();
+  }
+
+  /**
+   * Fire any warn thresholds the latest consumption has crossed.
+   *
+   * Warnings are recorded in the audit chain as well as delivered to onWarn,
+   * so "nobody told me it was at 95%" is answerable from the log rather than
+   * from whether a Slack message happened to be delivered.
+   */
+  private reportProgress(): void {
+    const { plan, budget } = this.options.policy;
+    if (!plan || !budget) return;
+
+    const thresholds = plan.warnAt ?? DEFAULT_WARN_AT;
+    const usage = this.ledger.snapshot();
+    const elapsed = usage.startedAt === null ? 0 : (this.now() - usage.startedAt) / 1000;
+
+    const dimensions: [BudgetWarning['dimension'], number, number | undefined][] = [
+      ['calls', usage.calls, budget.calls],
+      ['tokens', usage.tokens, budget.tokens],
+      ['usd', usage.usd, budget.usd],
+      ['seconds', elapsed, budget.seconds],
+    ];
+
+    for (const [dimension, used, limit] of dimensions) {
+      if (limit === undefined || limit <= 0) continue;
+      const fraction = used / limit;
+
+      for (const threshold of thresholds) {
+        const key = `${dimension}:${threshold}`;
+        if (fraction < threshold || this.warned.has(key)) continue;
+        this.warned.add(key);
+
+        const warning: BudgetWarning = {
+          dimension,
+          threshold,
+          used,
+          limit,
+          message:
+            `run "${this.run}" (${plan.purpose}) has used ` +
+            `${format(used)}/${format(limit)} ${dimension} — ` +
+            `${Math.round(fraction * 100)}% of the approved envelope`,
+        };
+
+        this.audit.record(
+          this.toCall('leash:warning', { ...warning }),
+          { effect: 'allow', rule: 'plan', reason: warning.message, violations: [] },
+          { calls: usage.calls, tokens: usage.tokens, usd: usage.usd }
+        );
+        this.options.onWarn?.(warning);
+      }
+    }
   }
 
   /** Current consumption. Useful for progress bars and for tests. */

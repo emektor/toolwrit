@@ -44,6 +44,8 @@ export type {
   ArgConstraint,
   BudgetLimits,
   BudgetUsage,
+  BudgetWarning,
+  RunPlan,
   Decision,
   Effect,
   EvalContext,

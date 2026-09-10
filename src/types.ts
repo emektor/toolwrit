@@ -103,6 +103,45 @@ export interface PolicyRule {
   limit?: RateLimit;
 }
 
+/**
+ * The envelope a run declares before it starts, and a human approves once.
+ *
+ * This is what makes capacity limits usable rather than annoying. A global
+ * threshold ("50MB is suspicious") is either too loose to catch anything or
+ * too tight to live with, because it has to guess at every job at once. A
+ * declared envelope does not guess: a render job that asked for an hour and
+ * two gigabytes gets exactly that without interruption, and the signal is not
+ * "this looks like a lot" but "this run left the envelope its operator
+ * approved". Approve at the start, hear nothing until a warn threshold.
+ *
+ * The plan is written into the audit chain as its first entry, so what was
+ * authorised is part of the tamper-evident record, not just what happened.
+ */
+export interface RunPlan {
+  /** What this run is for, in the operator's words. Carried into the audit log. */
+  purpose: string;
+  /** Who approved the envelope. Recorded, never verified by Leash itself. */
+  approvedBy?: string;
+  /**
+   * Fractions of the budget (0-1) at which the run reports to a human.
+   * Each threshold fires at most once. Defaults to [0.8, 0.95].
+   */
+  warnAt?: number[];
+}
+
+/** Emitted when consumption crosses one of the plan's warn thresholds. */
+export interface BudgetWarning {
+  /** Which budget dimension crossed. */
+  dimension: 'calls' | 'tokens' | 'usd' | 'seconds';
+  /** The threshold that fired, as a fraction of the limit. */
+  threshold: number;
+  /** Consumption and ceiling for that dimension. */
+  used: number;
+  limit: number;
+  /** Ready-to-send summary, e.g. for a Slack message. */
+  message: string;
+}
+
 /** A complete, self-contained enforcement policy. */
 export interface Policy {
   /** Schema version. Only "1" exists today; unknown versions are rejected. */
@@ -112,6 +151,8 @@ export interface Policy {
   /** Effect when no rule matches. Defaults to "deny" — Leash is deny-by-default. */
   default?: Effect;
   budget?: BudgetLimits;
+  /** The declared, pre-approved envelope for a run. See RunPlan. */
+  plan?: RunPlan;
   rules: PolicyRule[];
 }
 
