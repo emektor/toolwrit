@@ -224,9 +224,13 @@ def explain_policy(policy: Policy, file: str) -> str:
         parts = [
             f"{key}={js_number(value)}"
             for key, value in (
+                # Same order as the TypeScript CLI: a reviewer comparing the
+                # two implementations on one policy must see one rendering, and
+                # a dimension missing here reads as a ceiling that isn't set.
                 ("calls", policy.budget.calls),
                 ("tokens", policy.budget.tokens),
                 ("usd", policy.budget.usd),
+                ("bytes", policy.budget.bytes),
                 ("seconds", policy.budget.seconds),
             )
             if value is not None
