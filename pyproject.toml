@@ -21,6 +21,11 @@ classifiers = [
 ]
 dependencies = ["pyyaml>=6"]
 
+[project.urls]
+Homepage = "https://github.com/emektor/shortleash"
+Repository = "https://github.com/emektor/shortleash"
+Issues = "https://github.com/emektor/shortleash/issues"
+
 [project.optional-dependencies]
 test = ["pytest>=7"]
 
