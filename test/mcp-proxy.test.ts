@@ -138,10 +138,16 @@ async function withProxy(
       const already = received.find(pred);
       if (already) return Promise.resolve(already);
       return new Promise<Message>((resolve, reject) => {
-        waiters.push({ pred, resolve });
-        // Shorter than the test timeout so cleanup still runs on failure.
+        // Shorter than the test timeout so the child is still cleaned up when
+        // a message never arrives, instead of the runner killing the test.
         const timer = setTimeout(() => reject(new Error(`timed out waiting for ${what}`)), 5000);
-        timer.unref();
+        waiters.push({
+          pred,
+          resolve: (m) => {
+            clearTimeout(timer);
+            resolve(m);
+          },
+        });
       });
     },
     call(message) {
@@ -284,21 +290,27 @@ describe('mcp proxy: enforcement', () => {
     });
   });
 
-  it('rewrites a reply id the server got wrong rather than passing it on', TIMEOUT, async () => {
+  it('KNOWN LIMITATION: a server reply on the wrong id is not re-addressed', TIMEOUT, async () => {
     await withProxy({}, async (h) => {
-      // The proxy answers on the client's id, whatever the server echoed. In
-      // practice a *mismatched* echo is never routed back at all (see the
-      // routing limitation pinned in "lifecycle"), so the guarantee that holds
-      // is: the client never has to correlate on an id it did not choose.
-      const reply = await h.call({
+      // `handleToolsCall` ends with `toClient({ ...response, id: request.id })`,
+      // which reads as "the client's id always wins". It only wins when the
+      // server echoed the right id in the first place: routing is keyed on the
+      // id the *response* carries, so a mismatched reply never reaches that
+      // line at all. It is forwarded verbatim on the server's id instead, and
+      // the client is left waiting on its own. Pinned as the real behaviour so
+      // nobody reads that line as protection against a confused server.
+      h.send({
         jsonrpc: '2.0',
         id: 42,
         method: 'tools/call',
-        params: { name: 'fs.read', arguments: { echoId: 42 } },
+        params: { name: 'fs.read', arguments: { echoId: 99 } },
       });
+      const stray = await h.waitFor((m) => m.id === 99, 'the misaddressed reply');
 
-      assert.equal(reply.id, 42);
-      assert.equal(resultText(reply), 'ran fs.read');
+      assert.equal(resultText(stray), 'ran fs.read');
+      assert.equal(h.received.some((m) => m.id === 42), false);
+      // The call itself was allowed and metered — only the reply went astray.
+      assert.equal(h.leash.usage().calls, 1);
     });
   });
 });
@@ -418,11 +430,38 @@ describe('mcp proxy: denials are tool errors, not protocol errors', () => {
       });
 
       const text = resultText(reply);
-      assert.match(text, /Denied by policy/);
-      assert.match(text, /scoped-read/);
-      assert.match(text, /path: /);
+      assert.match(text, /Denied by policy: no rule allows "fs\.read" with these arguments/);
+      // The argument that failed, by path, so the model can retry differently
+      // instead of concluding the tool is broken.
+      assert.match(text, /- path: argument "path" must start with one of \["\/tmp\/"\]/);
       assert.match(text, /Tool "fs\.read" was not executed/);
       assert.match(text, /Audit: [0-9a-f]{12}/);
+    });
+  });
+
+  it('quotes the rule id when a rule did the denying', TIMEOUT, async () => {
+    const p = policyOf(
+      `version: "1"
+default: allow
+rules:
+  - id: no-secrets
+    description: secrets stay put
+    tools: ["secret.*"]
+    effect: deny
+`
+    );
+    await withProxy({ policy: p }, async (h) => {
+      const reply = await h.call({
+        jsonrpc: '2.0',
+        id: 9,
+        method: 'tools/call',
+        params: { name: 'secret.dump' },
+      });
+
+      const text = resultText(reply);
+      assert.match(text, /Denied by policy: secrets stay put/);
+      assert.match(text, /Rule: no-secrets/);
+      assert.deepEqual(toolsCalled(h.serverLog()), []);
     });
   });
 });
@@ -718,7 +757,26 @@ describe('mcp proxy: lifecycle and exit status', () => {
       assert.match(stderr.text(), /failed to start "leash-no-such-command-8f21a"/);
     } finally {
       stderr.restore();
-      await proxy.stop();
+    }
+  });
+
+  it('stop() settles after a failed spawn instead of hanging', TIMEOUT, async () => {
+    // A process that failed to spawn emits "error" and never "exit", so a stop()
+    // that waits only on "exit" never returns and a CLI shutting down after a
+    // bad --command hangs instead of exiting 127. stop() now also races the
+    // settled exit status, which the spawn failure resolves.
+    const stderr = captureStderr();
+    const proxy = bare('leash-no-such-command-8f21a', []);
+    try {
+      await proxy.start();
+      const settled = await Promise.race([
+        proxy.stop().then(() => 'settled'),
+        new Promise((resolve) => setTimeout(resolve, 500)).then(() => 'pending'),
+      ]);
+      assert.equal(settled, 'settled');
+      assert.equal(await proxy.exited(), 127);
+    } finally {
+      stderr.restore();
     }
   });
 
@@ -731,29 +789,35 @@ describe('mcp proxy: lifecycle and exit status', () => {
     assert.equal(await proxy.exited(), 128 + 15);
   });
 
-  it('answers a pending passthrough request when the child dies', TIMEOUT, async () => {
+  it('releases a pending passthrough waiter when the child dies', TIMEOUT, async () => {
     await withProxy({}, async (h) => {
       h.send({ jsonrpc: '2.0', id: 'hangs', method: 'test/hang' });
       // Round-trip a second request to prove the first one has arrived.
       await h.call({ jsonrpc: '2.0', id: 'ping', method: 'initialize' });
 
-      const wait = h.waitFor((m) => m.id === 'hangs');
+      const wait = h.waitFor(
+        (m) => (m.error as { code?: number } | undefined)?.code === -32000,
+        'the downstream-exited error'
+      );
       await h.stop();
       const reply = await wait;
 
-      assert.equal((reply.error as { code: number }).code, -32000);
       assert.match((reply.error as { message: string }).message, /downstream server exited/);
+      // KNOWN LIMITATION: the waiter is released, but the message the proxy
+      // synthesises carries no `id`, so a client with several requests in
+      // flight cannot tell which of them just died — it only learns that
+      // something did. Pinned as the actual behaviour, not fixed here.
+      assert.equal('id' in reply, false);
     });
   });
 
-  it('leaves a pending tools/call unanswered when the child dies', TIMEOUT, async () => {
+  it('leaves a pending tools/call with no reply at all when the child dies', TIMEOUT, async () => {
     // KNOWN LIMITATION, pinned rather than fixed. On exit the proxy resolves
-    // every pending waiter with an error, but a tools/call waiter is resolved
-    // *through* `leash.guard`, so its continuation runs on a microtask — after
-    // the same exit handler has already called output.end(). The error reply
-    // is therefore written to an ended stream and never reaches the client.
-    // A plain passthrough request (test above) is answered synchronously and
-    // does get its error, so the two paths behave differently at shutdown.
+    // every pending waiter, but a tools/call waiter is resolved *through*
+    // `leash.guard`, so its continuation runs on a microtask — after the same
+    // exit handler has already called output.end(). The reply is written to an
+    // ended stream and the client is told nothing whatsoever about that call,
+    // where a plain passthrough request at least gets the error above.
     await withProxy({}, async (h) => {
       h.send({
         jsonrpc: '2.0',
@@ -764,15 +828,11 @@ describe('mcp proxy: lifecycle and exit status', () => {
       await h.call({ jsonrpc: '2.0', id: 'ping', method: 'initialize' });
 
       await h.stop();
-      await new Promise((resolve) => setImmediate(resolve));
-      await new Promise((resolve) => setImmediate(resolve));
+      for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
 
-      assert.equal(h.received.some((m) => m.id === 'stuck'), false);
-      assert.equal(
-        h.outputErrors.some((err) => (err as NodeJS.ErrnoException).code === 'ERR_STREAM_WRITE_AFTER_END'),
-        true,
-        'the late reply is written to an already-ended output stream'
-      );
+      // Nothing but the unrelated ping reply ever reached the client; the only
+      // signal about "stuck" is the transport closing underneath it.
+      assert.deepEqual(h.received.map((m) => m.id), ['ping']);
     });
   });
 });

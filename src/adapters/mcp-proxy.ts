@@ -320,10 +320,18 @@ export function createMcpProxy(options: McpProxyOptions): McpProxy {
       stopped = true;
       const running = child;
       if (!running) return;
-      await new Promise<void>((resolve) => {
-        running.once('exit', () => resolve());
-        running.kill();
-      });
+
+      // A process that failed to spawn emits 'error' and never 'exit', so
+      // waiting on 'exit' alone hangs forever -- a CLI shutting down after a
+      // bad command would never reach its own exit. Waiting on the settled
+      // exit status covers both: it is resolved by the spawn failure too.
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          running.once('exit', () => resolve());
+          running.kill();
+        }),
+        exitStatus.then(() => undefined),
+      ]);
     },
   };
 
