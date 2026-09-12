@@ -21,8 +21,10 @@ That is all Leash is.
 ## 60-second start
 
 ```
-npm install leash
+npm install shortleash
 ```
+
+The package is published as `shortleash`; the binary it installs is `leash`. A Python port with the same policy language and a byte-compatible audit chain is on PyPI as `shortleash` too — see [`docs/python.md`](docs/python.md).
 
 **`leash.yaml`**
 
@@ -55,7 +57,7 @@ rules:
 **The three-line code change.** Wherever you currently execute a tool call, wrap it:
 
 ```ts
-import { Leash, LeashDenied, loadPolicyFile } from 'leash';
+import { Leash, LeashDenied, loadPolicyFile } from 'shortleash';
 
 const leash = new Leash({
   policy: loadPolicyFile('./leash.yaml'),
@@ -91,8 +93,8 @@ leash.spend(0.02);                                                       // non-
 And at the end of the run:
 
 ```ts
-console.log(leash.usage()); // { calls: 1, tokens: 1500, usd: 0.0281, startedAt: 1789035198799 }
-console.log(leash.head());  // 994b15a1... — the receipt for this run
+console.log(leash.usage()); // { calls: 1, tokens: 1500, usd: 0.0281, bytes: 512, startedAt: 1789035198799 }
+console.log(leash.head());  // 994b15a1... — the head of this run's audit chain
 ```
 
 ---
@@ -131,7 +133,9 @@ A refusal is returned to the agent as an **MCP tool error, not a protocol error*
 
 ```
 leash run     --policy <file> [--audit <file>] [--run <id>] -- <command> [args...]
-leash verify  <audit.jsonl>
+leash verify  <audit.jsonl> [--against <anchor.jsonl>]
+leash receipt <audit.jsonl> [--json]
+leash anchor  <audit.jsonl> --to <anchor.jsonl>
 leash check   --policy <file> --tool <name> [--args <json>]
 leash explain --policy <file>
 ```
@@ -139,7 +143,9 @@ leash explain --policy <file>
 | Command | Purpose | Exit codes |
 | --- | --- | --- |
 | `run` | Wrap an MCP server process; enforce every `tools/call`. | passthrough |
-| `verify` | Verify the hash chain of an audit file. | `0` intact, `1` tampered |
+| `verify` | Verify the hash chain of an audit file. With `--against`, also check its head still matches the receipt anchored for that run. | `0` every requested check passed, `1` any failed |
+| `receipt` | Summarise a run as one object — plan, usage, outcome, warnings. `--json` for one line of JSON. | `0` chain verifies, `1` it does not |
+| `anchor` | Append that receipt to an append-only anchor file. | `0` appended, `1` the chain does not verify |
 | `check` | Evaluate a single hypothetical call against a policy. | `0` allow, `1` deny, `2` ask |
 | `explain` | Human-readable policy summary for a reviewer. | `0` |
 
@@ -161,7 +167,7 @@ Assert what your policy must *refuse*, not only what it permits. Allowlists rot 
 
 The ladder, in order:
 
-1. **Budget.** An exhausted budget denies everything, whatever the rules say. `calls`, `tokens`, `usd` and `seconds` are checked in that order; the first one at or over its limit wins.
+1. **Budget.** An exhausted budget denies everything, whatever the rules say. `calls`, `tokens`, `usd`, `bytes` and `seconds` are checked in that order; the first one at or over its limit wins.
 2. **Rate limits.** Among rules whose tool glob and argument constraints matched, any rule with a spent `limit` denies immediately.
 3. **Effect precedence among matching rules: `deny` beats `ask` beats `allow`.** Rule order in the file does not matter. You cannot accidentally shadow a deny by putting an allow above it.
 4. **No match at all** falls through to `policy.default`, which is **`deny`** unless you set it otherwise.
