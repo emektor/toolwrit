@@ -15,6 +15,7 @@ evaluate-record-enforce sequence; only the calling convention differs.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import uuid
 from collections.abc import Mapping
@@ -107,6 +108,8 @@ class Leash:
         self._audit = AuditLog(run=self.run, file=audit_file, redact=redact)
         #: "dimension:threshold" keys already reported, so each fires exactly once.
         self._warned: set[str] = set()
+        self._lock: asyncio.Lock | None = None
+        self._lock_loop: object | None = None
 
         # The approved envelope goes into the chain before anything can consume it.
         # Recording it as an ordinary entry keeps the chain uniform -- one shape,
@@ -184,15 +187,24 @@ class Leash:
     ) -> T:
         """``guard`` for async callers: awaits the approval handler and the tool."""
         call = self._to_call(tool, args)
-        decision = evaluate(call, self._context())
 
-        if decision.effect == "ask":
-            approved = self._ask(call, decision)
-            if inspect.isawaitable(approved):
-                approved = await approved
-            decision = self._resolve_ask(decision, approved)
+        # Deciding, recording and counting is one critical section. Awaiting an
+        # approval handler used to leave it interruptible: concurrent calls all
+        # evaluated against the same pre-approval snapshot, so three guards
+        # against a budget of one were all approved and all executed. The tool
+        # itself still runs outside the lock, and the lock is only ever
+        # contended while an approval is genuinely pending.
+        async with self._decision_lock():
+            decision = evaluate(call, self._context())
 
-        self._enforce(tool, call, decision)
+            if decision.effect == "ask":
+                approved = self._ask(call, decision)
+                if inspect.isawaitable(approved):
+                    approved = await approved
+                decision = self._resolve_ask(decision, approved)
+
+            self._enforce(tool, call, decision)
+
         result = execute()
         if inspect.isawaitable(result):
             result = await result
@@ -245,6 +257,22 @@ class Leash:
         if decision.effect != "allow":
             raise LeashDenied(tool, decision, entry.hash)
         self._ledger.count_call(call.at)
+
+    def _decision_lock(self) -> asyncio.Lock:
+        """
+        The async critical section's lock, created on the running loop.
+
+        Built lazily because a Leash may be constructed outside any event loop,
+        and an asyncio.Lock bound to the wrong loop is worse than none. The
+        synchronous ``guard`` does not take it: it has no await point, so it
+        cannot interleave with itself on one thread. Mixing ``guard`` and
+        ``guard_async`` on one instance is therefore not protected -- pick one.
+        """
+        loop = asyncio.get_running_loop()
+        if self._lock is None or self._lock_loop is not loop:
+            self._lock = asyncio.Lock()
+            self._lock_loop = loop
+        return self._lock
 
     def _measure(self, call: ToolCall, result: T) -> T:
         """

@@ -9,6 +9,7 @@ a counter is trivially auditable.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -24,6 +25,26 @@ class TokenPrice:
     input: float = 0
     #: USD per 1,000 output tokens.
     output: float = 0
+
+
+def _require_consumption(name: str, value: float) -> float:
+    """
+    Reject a consumption figure that would corrupt the ledger.
+
+    A single NaN is permanent and silent: every ceiling check is
+    ``used >= limit``, and ``nan >= n`` is False, so one bad metering call
+    disables that budget for the rest of the run with no error anywhere. A
+    negative figure is as bad in the other direction -- it walks a spent budget
+    back under its ceiling and reopens it. A metering bug has to surface as an
+    exception, not as a limit that quietly stops applying.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"leash: {name} must be a finite number, got {value!r}")
+    if not math.isfinite(value):
+        raise TypeError(f"leash: {name} must be a finite number, got {value!r}")
+    if value < 0:
+        raise ValueError(f"leash: {name} must not be negative, got {value}")
+    return value
 
 
 def as_token_price(price: "TokenPrice | Mapping[str, float] | None") -> TokenPrice:
@@ -62,6 +83,8 @@ class Ledger:
 
     def add_tokens(self, tokens: float, usd: float = 0, at: int | None = None) -> None:
         """Record raw token consumption with a directly known cost."""
+        _require_consumption("tokens", tokens)
+        _require_consumption("usd", usd)
         self._start(now_ms() if at is None else at)
         self._usage.tokens += tokens
         self._usage.usd += usd
@@ -84,6 +107,10 @@ class Ledger:
         AttributeError deep in the ledger would be a poor welcome.
         """
         price = as_token_price(price)
+        _require_consumption("input tokens", input_tokens)
+        _require_consumption("output tokens", output_tokens)
+        _require_consumption("price.input", price.input)
+        _require_consumption("price.output", price.output)
         usd = (input_tokens / 1000) * price.input + (output_tokens / 1000) * price.output
         self.add_tokens(input_tokens + output_tokens, usd, at)
 
@@ -94,11 +121,13 @@ class Ledger:
         Called after the tool has run, because the size of what comes back is
         not knowable before it does.
         """
+        _require_consumption("bytes", size)
         self._start(at if at is not None else now_ms())
         self._usage.bytes += size
 
     def add_spend(self, usd: float, at: int | None = None) -> None:
         """Record spend that is not token-denominated, e.g. a paid API call."""
+        _require_consumption("usd", usd)
         self._start(now_ms() if at is None else at)
         self._usage.usd += usd
 
