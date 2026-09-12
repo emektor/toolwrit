@@ -1,0 +1,170 @@
+# CI for Leash.
+#
+# Layout this assumes: a repository whose root holds `leash/` (TypeScript) and
+# `leash-py/` (Python) as siblings. That is how the project is extracted from
+# its parent repo, and it is deliberate -- the two implementations share a hash
+# chain, so they have to be released and tested together. When extracting, this
+# file moves to `.github/workflows/ci.yml` at the repository root; the paths
+# below are already written for that position.
+#
+# The cross-language job is the one that matters most. Nothing but an automated
+# check keeps the two implementations from drifting: a field added to an audit
+# entry on one side and not the other breaks compatibility silently, both suites
+# still pass, and only a log written by one and read by the other reveals it.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  typescript:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['20', '22']
+    defaults:
+      run:
+        working-directory: leash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.10', '3.12']
+    defaults:
+      run:
+        working-directory: leash-py
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install pytest pyyaml
+      - run: python -m pytest -q
+
+  # A package that installs but cannot be imported is a broken release, and the
+  # test suite never touches the published entry points -- it imports from src.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci && npm run build
+        working-directory: leash
+      - name: pack, install, and import what consumers will get
+        run: |
+          set -euo pipefail
+          npm pack --pack-destination "$RUNNER_TEMP" --silent
+          cd "$RUNNER_TEMP"
+          npm init -y >/dev/null
+          npm install --silent ./shortleash-*.tgz
+          ./node_modules/.bin/leash --version
+          node --input-type=module -e "
+            import { Leash, parsePolicy, verifyChain, summarize } from 'shortleash';
+            import { wrapTool } from 'shortleash/sdk';
+            import { createMcpProxy } from 'shortleash/mcp';
+            const policy = parsePolicy('version: \"1\"\ndefault: deny\nrules: []\n');
+            const leash = new Leash({ policy });
+            if (leash.check('anything').effect !== 'deny') throw new Error('deny-by-default broken');
+            if (!verifyChain(leash.entries()).ok) throw new Error('chain broken');
+            if (summarize(leash.entries()).entryCount !== 0) throw new Error('receipt broken');
+            if (typeof wrapTool !== 'function') throw new Error('sdk subpath export broken');
+            if (typeof createMcpProxy !== 'function') throw new Error('mcp subpath export broken');
+            console.log('published entry points OK');
+          "
+        working-directory: leash
+
+  cross-language:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci && npm run build
+        working-directory: leash
+      - run: pip install pyyaml
+
+      - name: a chain written by either implementation verifies with the other
+        run: |
+          set -euo pipefail
+          root="$PWD"
+          work="$(mktemp -d)"
+          cd "$work"
+
+          cat > p.yaml <<'POLICY'
+          version: "1"
+          default: deny
+          budget: { calls: 50, bytes: 4000 }
+          plan: { purpose: "ci parity", approvedBy: ci }
+          rules:
+            - id: read
+              tools: ["fs.read"]
+              effect: allow
+              when: { path: { startsWith: ["/data/"] } }
+          POLICY
+
+          export PYTHONPATH="$root/leash-py/src"
+
+          python - <<'PY'
+          from leash import Leash, LeashDenied, load_policy_file
+          clock = [1789000000000]
+          def now():
+              clock[0] += 1000
+              return clock[0]
+          leash = Leash(policy=load_policy_file("p.yaml"), run="parity",
+                        audit_file="py.jsonl", now=now)
+          for path in ["/data/a", "/etc/passwd", "/data/b"]:
+              try:
+                  leash.guard("fs.read", {"path": path}, lambda: "contents")
+              except LeashDenied:
+                  pass
+          leash.meter(1000, 500, {"input": 0.003, "output": 0.015})
+          print("python head:", leash.head())
+          PY
+
+          node --input-type=module -e "
+            const { Leash, LeashDenied, loadPolicyFile } = await import('$root/leash/dist/index.js');
+            let t = 1789000000000; const now = () => (t += 1000);
+            const leash = new Leash({ policy: loadPolicyFile('p.yaml'), run: 'parity', auditFile: 'ts.jsonl', now });
+            for (const path of ['/data/a', '/etc/passwd', '/data/b']) {
+              try { await leash.guard('fs.read', { path }, () => 'contents'); }
+              catch (e) { if (!(e instanceof LeashDenied)) throw e; }
+            }
+            leash.meter(1000, 500, { input: 0.003, output: 0.015 });
+            console.log('typescript head:', leash.head());
+          "
+
+          node "$root/leash/dist/cli.js" verify py.jsonl
+          python -m leash.cli verify ts.jsonl
+
+          # Equal hashes, not merely two logs that each verify on their own.
+          hashes() {
+            node -e "
+              const lines = require('node:fs').readFileSync('$1', 'utf8').trim().split('\n');
+              console.log(lines.map((l) => JSON.parse(l).hash).join('\n'));
+            "
+          }
+          diff <(hashes py.jsonl) <(hashes ts.jsonl)
+          echo "entry hashes are identical across implementations"
