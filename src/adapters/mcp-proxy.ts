@@ -48,8 +48,21 @@ export interface McpProxyOptions {
 
 export interface McpProxy {
   start(): Promise<void>;
+  /**
+   * Resolves with the status the proxy itself should exit with, once the
+   * downstream server is gone.
+   *
+   * A supervisor that cannot tell a crashed server from a clean shutdown will
+   * report a failed run as a success, so the child's fate has to travel back
+   * out: its own exit code, 128+n when a signal killed it, and 127 when it
+   * could not be started at all — the shell's convention for a missing command.
+   */
+  exited(): Promise<number>;
   stop(): Promise<void>;
 }
+
+/** Exit status for a command that could not be spawned, following the shell. */
+const EXIT_NOT_RUNNABLE = 127;
 
 /**
  * Tools the agent should even be told about.
@@ -67,12 +80,32 @@ export function visibleTools(policy: Policy, toolNames: readonly string[]): stri
   return toolNames.filter((name) => policy.rules.some((rule) => matchesAnyGlob(rule.tools, name)));
 }
 
+/** The few signals worth reporting precisely; anything else lands on 128. */
+const SIGNAL_NUMBERS: Record<string, number> = {
+  SIGHUP: 1,
+  SIGINT: 2,
+  SIGQUIT: 3,
+  SIGKILL: 9,
+  SIGTERM: 15,
+};
+
 export function createMcpProxy(options: McpProxyOptions): McpProxy {
   const input = options.input ?? process.stdin;
   const output = options.output ?? process.stdout;
 
   let child: ChildProcessWithoutNullStreams | null = null;
   let stopped = false;
+
+  // Settled by whichever comes first: the child exiting, or failing to start.
+  let settleExit: (status: number) => void = () => {};
+  const exitStatus = new Promise<number>((resolve) => {
+    let settled = false;
+    settleExit = (status) => {
+      if (settled) return;
+      settled = true;
+      resolve(status);
+    };
+  });
   let ended = false;
 
   /**
@@ -114,11 +147,32 @@ export function createMcpProxy(options: McpProxyOptions): McpProxy {
     const name = typeof params.name === 'string' ? params.name : '';
     const args = isObject(params.arguments) ? params.arguments : {};
 
+    // A tools/call with no id is shaped like a notification, so there is no
+    // response to send and nothing downstream will answer. It still has to be
+    // enforced: forwarding it unguarded would let a client execute any tool by
+    // simply omitting the id, which is the whole policy bypassed by one field.
+    // It is guarded and audited like any other call, and a refusal is dropped
+    // rather than answered, because the client is not waiting for a reply.
+    const isNotification = request.id === undefined || request.id === null;
+
     try {
+      // forwardToChild already resolves immediately for an id-less message.
       const response = await options.leash.guard(name, args, () => forwardToChild(request));
+      if (isNotification) return;
       // Preserve the client's id even if the downstream server echoed something else.
       toClient({ ...response, id: request.id ?? null });
     } catch (err) {
+      if (isNotification) {
+        // Nothing is waiting for an answer, so the refusal goes to the operator
+        // rather than to the agent. Dropping it is the enforcement.
+        warn(
+          err instanceof LeashDenied
+            ? `denied notification tools/call "${name}": ${err.decision.reason}`
+            : `error guarding notification tools/call "${name}": ${(err as Error).message}`
+        );
+        return;
+      }
+
       if (!(err instanceof LeashDenied)) {
         warn(`unexpected error guarding ${name}: ${(err as Error).message}`);
         toClient({
@@ -145,7 +199,9 @@ export function createMcpProxy(options: McpProxyOptions): McpProxy {
   }
 
   function handleFromClient(message: JsonRpcMessage): void {
-    if (message.method === 'tools/call' && message.id !== undefined && message.id !== null) {
+    // Every tools/call is enforced, with or without an id. Requiring an id here
+    // would make omitting one a complete policy bypass.
+    if (message.method === 'tools/call') {
       void handleToolsCall(message);
       return;
     }
@@ -212,6 +268,7 @@ export function createMcpProxy(options: McpProxyOptions): McpProxy {
 
       spawned.on('error', (err) => {
         warn(`failed to start "${options.command}": ${err.message}`);
+        settleExit(EXIT_NOT_RUNNABLE);
         endOutput();
       });
 
@@ -245,6 +302,7 @@ export function createMcpProxy(options: McpProxyOptions): McpProxy {
           resolve({ jsonrpc: '2.0', error: { code: -32000, message: 'downstream server exited' } });
         }
         pending.clear();
+        settleExit(signal ? 128 + (SIGNAL_NUMBERS[signal] ?? 0) : code ?? 0);
         endOutput();
       });
 
@@ -252,6 +310,10 @@ export function createMcpProxy(options: McpProxyOptions): McpProxy {
         spawned.once('spawn', () => resolve());
         spawned.once('error', () => resolve());
       });
+    },
+
+    exited(): Promise<number> {
+      return exitStatus;
     },
 
     async stop(): Promise<void> {

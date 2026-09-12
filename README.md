@@ -2,7 +2,7 @@
 
 **A deterministic leash for AI agents.** Allowlist the tools, cap the budget, prove what happened.
 
-`npm` version · build status · Apache-2.0 · Node >= 20 *(badges go here)*
+Apache-2.0 · Node >= 20 · Python >= 3.10
 
 Leash is a **library and a sidecar, not a gateway**. Your traffic never leaves your infrastructure. You do not point your agent at someone else's cloud — you wrap your tool handlers in three lines, or you put `leash run --policy leash.yaml --` in front of an MCP server you already run.
 
@@ -24,7 +24,7 @@ That is all Leash is.
 npm install shortleash
 ```
 
-The package is published as `shortleash`; the binary it installs is `leash`. A Python port with the same policy language and a byte-compatible audit chain is on PyPI as `shortleash` too — see [`docs/python.md`](docs/python.md).
+The package name is `shortleash`; the binary it installs is `leash`. A Python port with the same policy language and a compatible audit chain uses the same name on PyPI — see [`docs/python.md`](docs/python.md).
 
 **`leash.yaml`**
 
@@ -417,7 +417,7 @@ Every constraint present must hold. **An absent value fails every constraint exc
 | `minLength` | `number` | strings, arrays | Inclusive lower bound on `.length`. |
 | `maxLength` | `number` | strings, arrays | Inclusive upper bound on `.length`. |
 
-Constraints that do not apply to the value's runtime type are simply not evaluated — `min` on a string is inert. Pair a bound with `type` when you want the type itself enforced.
+A constraint that does not apply to the value's runtime type produces a `type` violation rather than being skipped: `max: 100` against the string `"9999"` fails. Skipping it would fail open, since a satisfied constraint lets the rule match and the call through.
 
 **`urlHosts` and the leading dot.** An entry beginning with `.` matches that domain *and every subdomain*: `.example.com` covers `example.com` and `api.example.com`. Anything else must match the hostname exactly, so an allowlist never widens by accident. `example.com` (no dot) does **not** admit `api.example.com`, and — importantly — `.example.com` does not admit `notexample.com`.
 

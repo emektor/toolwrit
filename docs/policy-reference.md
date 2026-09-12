@@ -179,7 +179,7 @@ A type mismatch **short-circuits**: no other constraint on that path is evaluate
 | `{"count": 50}` | — |
 | `{"count": "50"}` | `type`: `argument "count" must be a number, got string` |
 
-Constraints that do not apply to the value's runtime type are silently inert — `min` against a string is not checked. **Pair a bound with `type` whenever the type itself matters**, otherwise `{"count": "9999"}` sails past a `max: 100`.
+A constraint that does not apply to the value's runtime type is a **violation**, not a skipped check: `max: 100` against the string `"9999"` fails with a `type` violation rather than passing. Skipping it would fail open — the constraint would count as satisfied, the rule would match, and the call would be allowed — and an argument object is untrusted model output. Adding `type` is still worth doing when you want the mismatch named explicitly in the message, but it is no longer what stands between a wrong type and an allowed call.
 
 ### `oneOf` / `noneOf`
 

@@ -177,6 +177,13 @@ async function cmdRun(parsed: ParsedArgs): Promise<void> {
   process.on('SIGTERM', shutdown);
 
   await proxy.start();
+
+  // Wait for the downstream server and exit with its status. Returning as soon
+  // as the child had spawned reported every run as a success -- a crashed
+  // server and a clean shutdown were indistinguishable to whatever supervises
+  // this process.
+  const status = await proxy.exited();
+  if (status !== 0) process.exitCode = status;
 }
 
 function cmdVerify(parsed: ParsedArgs): void {
