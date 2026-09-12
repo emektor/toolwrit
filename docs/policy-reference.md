@@ -17,7 +17,13 @@ budget:               # optional, run-scoped ceilings
   calls: 100
   tokens: 500000
   usd: 5.00
+  bytes: 20000000
   seconds: 900
+
+plan:                 # optional, the pre-approved envelope. REQUIRES budget.
+  purpose: nightly CRM export for the EU region
+  approvedBy: ergin
+  warnAt: [0.8, 0.95]
 
 rules:                # required array (may be empty)
   - id: some-rule
@@ -39,7 +45,7 @@ Rule `id`s must be unique within the document. Duplicates are a load error, beca
 
 `evaluate(call, ctx)` is a pure function of policy, call and ledger state. No clock reads, no I/O, no model. The same inputs always yield the same `Decision`.
 
-1. **Budget.** Checked first, before any rule. An exhausted budget denies everything. Order within the budget: `calls`, `tokens`, `usd`, `seconds`; the first at-or-over its limit produces the violation.
+1. **Budget.** Checked first, before any rule. An exhausted budget denies everything. Order within the budget: `calls`, `tokens`, `usd`, `bytes`, `seconds`; the first at-or-over its limit produces the violation.
 2. **Rule matching.** For each rule, in document order: does any glob in `tools` match the tool name? If so, do all of `when`'s constraints hold against the arguments? Rules passing both are *matched*.
 3. **Rate limits.** Any matched rule whose `limit` is spent denies immediately.
 4. **Effect precedence.** Among matched rules, `deny` beats `ask` beats `allow`. **Document order does not break ties across effects** — you cannot shadow a deny by putting an allow above it. Within a single effect, the first matching rule in document order supplies the id and description.
@@ -356,17 +362,69 @@ budget:
   calls: 100
   tokens: 500000
   usd: 5.00
+  bytes: 20000000
   seconds: 900
 ```
 
-All fields optional, each a positive number. Checked before every rule, using `>=` — `calls: 100` permits calls 1 through 100 and refuses the 101st.
+All fields optional, each a positive number. `0`, a negative number, a non-number or `Infinity` is a load error (`"bytes" must be a positive number`). Checked before every rule, using `>=` — `calls: 100` permits calls 1 through 100 and refuses the 101st.
 
 | Field | Fed by | Message on exhaustion |
 | --- | --- | --- |
 | `calls` | every permitted `guard()` | `call budget exhausted: 2/2 calls used` |
 | `tokens` | `meter(input, output)` | `token budget exhausted: 1500/1000 tokens used` |
 | `usd` | `meter(..., price)` and `spend(usd)` | `spend budget exhausted: $1.5000/$1.0000 used` |
+| `bytes` | the size of every result `guard()` returned | `data budget exhausted: 20000000/20000000 bytes returned by tools` |
 | `seconds` | wall clock from the first metered event | `time budget exhausted: 301.0s/300s elapsed` |
+
+### `bytes` — the volume ceiling
+
+`bytes` caps the total size of what tools **return** over a run. It catches a different attack from the rules: bulk exfiltration is rarely a forbidden action, it is a permitted action repeated until something is drained. Every page of a paginated read passes the allowlist; only the running total gives it away.
+
+```yaml
+budget:
+  bytes: 20000000   # 20 MB of tool output for the whole run
+```
+
+With that budget and a tool returning 4,000,000 bytes per call:
+
+```
+call 1: ok, bytes now 4000000
+call 2: ok, bytes now 8000000
+call 3: ok, bytes now 12000000
+call 4: ok, bytes now 16000000
+call 5: ok, bytes now 20000000
+call 6: leash: crm.search denied — data budget exhausted: 20000000/20000000 bytes returned by tools
+```
+
+```json
+{
+  "effect": "deny",
+  "rule": null,
+  "reason": "data budget exhausted: 20000000/20000000 bytes returned by tools",
+  "violations": [
+    { "rule": "budget", "constraint": "bytes",
+      "message": "data budget exhausted: 20000000/20000000 bytes returned by tools" }
+  ]
+}
+```
+
+**The ordering, which you must design around.** A result's size is not knowable before the tool runs, so the measurement happens afterwards. The call that blows the ceiling **completes**; the **next** one is refused. A `bytes` budget bounds a run at the limit *plus one call's worth*, never exactly the limit. Size it so that one extra call is affordable, and cap single-response size at the tool (`maxLength` on a `limit`/`page_size` argument, or a server-side cap) — `bytes` bounds iteration, not one oversized response.
+
+**How a size is measured.** In order:
+
+| Result | Size |
+| --- | --- |
+| `null` / `undefined` | `0` |
+| a string | its UTF-8 byte length (`"€"` is 3, not 1) |
+| a `TypedArray` / `DataView` / `ArrayBuffer` | its `byteLength` |
+| anything else | the UTF-8 byte length of `JSON.stringify(result)` |
+| anything `JSON.stringify` throws on | the UTF-8 byte length of `String(result)` — **under-counted** |
+
+That last row is the honest limitation. A cyclic object, or a class whose `toJSON` throws, collapses to something like `"[object Object]"` — far smaller than the data it holds. Under-counting a volume ceiling **fails open**. It is documented rather than hidden because the alternative, throwing from inside the enforcement layer, is worse.
+
+Measurement is deterministic: the same result always measures the same, so a replayed audit log reaches the same verdict.
+
+Two more notes. Bytes are attributed to the call's own timestamp, not a fresh clock read, so the ledger does not depend on how long a tool took. And under `leash run`, the measured value is the **whole JSON-RPC response object** from the downstream MCP server, not just the text inside it — in a measured run a 100-character text result cost 173 bytes.
 
 Leash cannot see your model calls, so nothing enters the ledger by itself:
 
@@ -380,6 +438,124 @@ leash.spend(0.02); // a metered third-party API call
 The `seconds` clock starts at the first metered event — the first permitted call, `meter()` or `spend()` — not at process start. A run that sits idle for an hour before doing anything gets its full time budget.
 
 Budget violations report `rule: null` and `violations[0].rule: "budget"`, distinguishing them from rule denials at a glance in the audit log.
+
+---
+
+## The `plan` block
+
+```yaml
+budget:
+  calls: 200
+  usd: 5.00
+  bytes: 20000000
+  seconds: 3600
+
+plan:
+  purpose: nightly CRM export for the EU region
+  approvedBy: ergin
+  warnAt: [0.8, 0.95]
+```
+
+A plan is the envelope a run declares before it starts and a human approves once.
+
+The case for it: **a global threshold has to guess at every job at once.** "More than 50MB is suspicious" must clear your largest legitimate job, which makes it too loose to catch anything; tighten it and it fires on normal work until somebody mutes it — and an alert people mute is the same as no alert. A declared envelope does not guess. A job that asked for an hour and two gigabytes gets exactly that, uninterrupted, and the signal becomes "this run left the envelope its operator approved" — a fact rather than a hunch. Approve at the start, hear nothing until a threshold.
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `purpose` | `string` | yes | What the run is for, in the operator's words. Must be non-empty after trimming. Carried into the audit log and into every warning message. |
+| `approvedBy` | `string` | no | Who approved the envelope. **Recorded, never verified by Leash.** Written to the chain as `null` when unset. |
+| `warnAt` | `number[]` | no | Fractions of the budget at which the run reports. Non-empty; each entry `> 0` and `<= 1`. Sorted ascending at load. Defaults to `[0.8, 0.95]`. |
+
+### Load-time rules
+
+| Policy | Error |
+| --- | --- |
+| `plan` with no `budget` | `a "plan" requires a "budget" to measure against; add budget limits or remove the plan` |
+| `plan` with no `purpose` | `plan: "purpose" must be a non-empty string` |
+| `warnAt: [80]` | `plan: "warnAt" entries must be fractions greater than 0 and at most 1, e.g. 0.8` |
+
+The first one is the one people trip over, and it is deliberate: a plan with nothing to measure against would report nothing, and silence reads as "all clear" rather than "not configured".
+
+### The plan is entry 1 of the audit chain
+
+The `Leash` constructor records the plan **before any call can be guarded**, so what was *authorised* is part of the tamper-evident record and not just what happened. No operator can later claim a different budget was approved than the one the run started under.
+
+```json
+{
+  "seq": 1,
+  "at": 1789178401000,
+  "run": "nightly-2026-09-12",
+  "tool": "leash:plan",
+  "args": {
+    "purpose": "nightly CRM export for the EU region",
+    "approvedBy": "ergin",
+    "budget": { "calls": 200, "usd": 5, "bytes": 20000000, "seconds": 3600 },
+    "warnAt": [0.8, 0.95]
+  },
+  "decision": { "effect": "allow", "rule": "plan", "reason": "run plan recorded", "violations": [] },
+  "usage": { "calls": 0, "tokens": 0, "usd": 0, "bytes": 0 },
+  "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+  "hash": "e375bde8b22e4e1d2726a1a9d4110a5ae1fd922329689f2aa2b1f64d1ed43382"
+}
+```
+
+The zero `usage` is the point: the envelope is committed before anything can be spent against it. The entry records the values Leash will actually use, not the literal YAML — so `warnAt` appears as `[0.8, 0.95]` even when the policy omitted it, and `approvedBy` appears as `null` rather than being dropped. The entry is self-describing; a reviewer does not need the policy file to read it.
+
+### Warnings
+
+Each `warnAt` threshold fires **at most once per dimension**, across `calls`, `tokens`, `usd`, `bytes` and `seconds`. Repetition is exactly what gets an alert muted. Thresholds are evaluated after every permitted `guard()`, `meter()` and `spend()` — never on a denial.
+
+```ts
+const leash = new Leash({
+  policy: loadPolicyFile('./export.yaml'),
+  auditFile: './audit.jsonl',
+  onWarn: (w) => queueSlackPost(w.message), // runs inline with metering: do not await
+});
+```
+
+```
+run "nightly-2026-09-12" (nightly CRM export for the EU region) has used 16,000,000/20,000,000 bytes — 80% of the approved envelope
+```
+
+The `BudgetWarning` object:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `dimension` | `"calls" \| "tokens" \| "usd" \| "seconds" \| "bytes"` | Which dimension crossed. |
+| `threshold` | `number` | The `warnAt` fraction that fired. |
+| `used` | `number` | Consumption in that dimension. |
+| `limit` | `number` | The ceiling from `budget`. |
+| `message` | `string` | The ready-to-send line above. |
+
+Every warning is **also** written to the chain, so "nobody told me it was at 95%" is answerable from the log rather than from whether a Slack message happened to be delivered:
+
+```json
+{
+  "seq": 6,
+  "at": 1789178410000,
+  "run": "nightly-2026-09-12",
+  "tool": "leash:warning",
+  "args": {
+    "dimension": "bytes",
+    "threshold": 0.8,
+    "used": 16000000,
+    "limit": 20000000,
+    "message": "run \"nightly-2026-09-12\" (nightly CRM export for the EU region) has used 16,000,000/20,000,000 bytes — 80% of the approved envelope"
+  },
+  "decision": { "effect": "allow", "rule": "plan", "reason": "run \"nightly-2026-09-12\" (nightly CRM export for the EU region) has used 16,000,000/20,000,000 bytes — 80% of the approved envelope", "violations": [] },
+  "usage": { "calls": 4, "tokens": 0, "usd": 0, "bytes": 16000000 },
+  "prev": "da02708df6bc2338bf03089dd7356bf1e81a0b1c3e6895216a655f877bc4e905",
+  "hash": "4cd48e58f9b83f20a143534960983d5d72062507d8c356b35b2292845ce479cd"
+}
+```
+
+`used` may exceed `limit` in a warning. A threshold fires at the first metering event where the fraction is at or above it, and that event can carry it well past 100% in one step — the `bytes` dimension, measured a whole result at a time, does this routinely. The percentage in the message is the real fraction, not the threshold:
+
+```
+run "nightly-2026-09-12" (nightly CRM export for the EU region) has used 20,000,000/20,000,000 bytes — 100% of the approved envelope
+```
+
+**A warning is a report, not a control.** Crossing 95% refuses nothing; the budget does the refusing, at 100%. And `plan` changes no enforcement decision at all — `evaluate` never reads it. It changes what is recorded and what is reported.
 
 ---
 
@@ -452,7 +628,13 @@ default: deny
 
 budget:
   calls: 200
+  bytes: 10000000
   seconds: 600
+
+plan:
+  purpose: answer a question from the workspace and the docs
+  approvedBy: platform-team
+  warnAt: [0.8]
 
 rules:
   - id: read
@@ -483,6 +665,8 @@ rules:
     limit: { max: 30, perSeconds: 60 }
 ```
 
+The `bytes: 10000000` line is what keeps "read-only" from meaning "copy everything". A read-only agent has no destructive authority at all, which is exactly why a drain through it is invisible to a rule-based policy: every single read is legitimate. Ten megabytes of tool output is generous for answering a question and stingy for exfiltrating a repository.
+
 Everything not named — `fs.write`, `shell.exec`, anything a future MCP server adds — is denied by the default. That is the point of deny-by-default: the policy does not need updating when the tool surface grows.
 
 The `no-secrets` deny rule uses `fs.**` rather than `fs.*` so it also covers `fs.read.raw`-style nested names. Deny rules should always be written *wider* than the allow rules they backstop.
@@ -497,7 +681,13 @@ default: deny
 budget:
   calls: 500
   usd: 10.00
+  bytes: 50000000
   seconds: 3600
+
+plan:
+  purpose: implement ticket ENG-4412 and open a pull request
+  approvedBy: ergin
+  warnAt: [0.5, 0.8, 0.95]
 
 rules:
   - id: repo-read
@@ -569,6 +759,12 @@ default: deny
 budget:
   calls: 60
   usd: 1.00
+  bytes: 2000000
+
+plan:
+  purpose: resolve one customer ticket
+  approvedBy: support-lead
+  warnAt: [0.8, 0.95]
 
 rules:
   - id: lookup
@@ -615,8 +811,11 @@ const leash = new Leash({
   redact: ['api_key', 'headers.authorization'],
   onAsk: (call, decision) =>
     escalateToQueue({ tool: call.tool, args: call.args, why: decision.reason }),
+  onWarn: (warning) => notifySupportChannel(warning.message),
 });
 ```
+
+`bytes: 2000000` is the line that separates "look up this customer" from "page through the customer table". `crm.search` is allowed forty times by `lookup`'s rate limit, and forty unbounded searches is a different tool from forty small ones; only the running total notices the difference.
 
 The `to: { maxLength: 1 }` constraint is the important line. A support agent that can email one person is a support agent; one that can email an array is a mailing-list incident waiting for a bad prompt.
 
@@ -633,7 +832,13 @@ budget:
   calls: 300
   tokens: 2000000
   usd: 25.00
+  bytes: 200000000
   seconds: 7200
+
+plan:
+  purpose: literature review for the Q4 competitive brief
+  approvedBy: ergin
+  warnAt: [0.5, 0.8, 0.95]
 
 rules:
   - id: search
@@ -679,6 +884,8 @@ leash.meter(usage.input_tokens, usage.output_tokens, { input: 0.003, output: 0.0
 // Metered third-party APIs.
 leash.spend(0.01);
 ```
+
+A research agent is the case where a plan earns its keep. Two hundred megabytes of fetched pages is alarming for a support ticket and unremarkable for a literature review; no single global threshold can be right for both. The envelope is declared per job, approved once, and the three `warnAt` fractions turn a two-hour unattended run into three lines of progress instead of either silence or a stream of noise.
 
 The cap only binds if you call `meter()`. Wire it into the same place you already read token usage from your model response, and the 301st dollar becomes impossible rather than merely unlikely.
 
@@ -726,6 +933,8 @@ Weight the suite toward refusals. Allowlists rot in the permissive direction —
 - Shell and other command arguments use `oneOf`, not a pattern.
 - Irreversible tools have a `limit`.
 - The budget's `usd`/`tokens` fields are backed by real `meter()` calls.
+- `budget.bytes` is set on anything that reads, sized for the job plus one call's overshoot.
+- A `plan` declares what this run is for, and its `warnAt` thresholds go somewhere a human reads.
 - Sensitive argument paths are listed in `redact`.
 - `ask` rules have a `description` an operator can act on, and a real `onAsk` handler in production.
 - CI asserts the refusals, not only the permissions.

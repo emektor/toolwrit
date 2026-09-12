@@ -49,6 +49,32 @@ Denied calls are not counted against a rate limit, so being refused does not bur
 
 The estimate is only as good as your price table. Treat it as a circuit breaker, not accounting.
 
+### Bulk drain through permitted reads
+
+This is the attack the rules cannot see. Exfiltration at volume is rarely a *forbidden* action — it is a *permitted* action repeated until something is empty. An agent allowed to read customer records reads page 1, then page 2, then page nine thousand. Every one of those calls is exactly what the tool exists for; each passes the allowlist on its own merits. Only the running total gives it away.
+
+`budget.bytes` is the control. It caps the total size of what tools return across a run, and `guard()` feeds it automatically — unlike `usd` and `tokens`, it needs no cooperation from your integration.
+
+**What it does not catch: a small, precise exfiltration.** One secret in a URL. An API key appended to a query string. A row of PII in a filename. A hundred bytes leaving does not move a megabyte-scale counter, and no volume ceiling you would actually deploy would notice it.
+
+The control for that case is the **argument allowlist** — `urlHosts` on the URL a tool may fetch, `oneOf` on a destination, `maxLength` on a recipient array. Those bound *where* data can go; `bytes` bounds *how much* can move. Neither substitutes for the other:
+
+| | Caught by `urlHosts` / argument constraints | Caught by `budget.bytes` |
+| --- | --- | --- |
+| One secret POSTed to `evil.com` | yes — the host is not allowlisted | no — far too small to register |
+| One secret POSTed to an allowlisted host | no | no |
+| Nine thousand permitted reads of the customer table | no — every call is legal | yes — the total is not |
+
+Deploy both. And note the ordering limitation that follows from measuring after the fact: a result's size is not knowable before the tool runs, so the call that breaches the ceiling **completes** and the next one is refused. `bytes` bounds a run at the limit plus one call. If one call can return everything, cap the response at the tool, not here. An unserialisable result is also under-counted, which fails open.
+
+### A run that quietly outgrows what was approved
+
+A `plan` block declares the envelope — purpose, approver, warn thresholds — and it is recorded as **entry 1 of the audit chain, before the run can consume anything**. What was authorised is therefore in the tamper-evident record alongside what happened, so the two can be compared rather than one being taken on trust.
+
+Warn thresholds fire at most once per dimension and are recorded in the chain as well as delivered to `onWarn`. That matters for the disputed-account adversary specifically: whether an operator was told the run hit 95% is answerable from the log, not from whether a notification happened to be delivered.
+
+A plan is a **recording and reporting** control, not an enforcement one. `evaluate` never reads it. Crossing a threshold refuses nothing; the budget does the refusing, at 100%. And `approvedBy` is a string Leash writes down — it is evidence of what the policy file claimed, never proof that a particular human agreed.
+
 ### A disputed account of what happened
 
 Every decision — allowed, denied, or approved-after-ask — is appended to a hash-chained JSONL log. Each entry commits to its predecessor's hash, so editing, deleting or reordering any past entry invalidates every hash after it. `leash verify audit.jsonl` exits `0` or `1`.
@@ -56,6 +82,12 @@ Every decision — allowed, denied, or approved-after-ask — is appended to a h
 Because `evaluate` is pure, an entry contains everything needed to replay its decision: the call, the arguments as evaluated, the decision with its violations, and the budget state *at the moment of the decision*. A reviewer does not have to take your word for the reasoning.
 
 Redacted values are hashed **in their redacted form**, so a redaction is part of the committed record rather than a later edit. You cannot retroactively redact a logged secret and still pass verification, and you cannot forge a redaction to disguise what an argument was.
+
+### A fleet nobody can actually review
+
+A chain proves what one run did. Nobody reads chains at scale, and a control that only works when someone reads hundreds of millions of lines is not a control. `leash receipt` reduces a run to one summary object — plan, usage, fractions of the approved envelope consumed, outcome counts, which tools were denied, and whether a budget ceiling was hit. A fleet becomes as many receipts as it has runs, with the runs that left their envelope already flagged.
+
+`summarize` is pure — a function of the chain alone, no I/O and no clock — so a receipt recomputed during an audit can be compared byte for byte with the one issued at the time. That property is what makes the receipt usable as an anchor rather than merely as a dashboard row.
 
 ### Silent failure
 
@@ -122,9 +154,11 @@ The security of a Leash deployment rests on these, in order of how much weight t
 1. **The policy file.** Whoever can edit it decides what the agent may do. Treat it as production configuration: version-controlled, code-reviewed, tested in CI with `leash check`, and not writable by the agent. An agent with a `fs.write` rule covering its own policy has no policy.
 2. **The host process.** No boundary between Leash and its host. Compromise there is total.
 3. **The tool implementations.** The policy's guarantees stop at the handler's front door.
-4. **The audit file's storage.** Tamper-*evident*, not tamper-*proof*. See below.
-5. **The `onAsk` handler.** It is the human-in-the-loop. If it auto-approves, or is reachable by the agent, the `ask` effect is decorative.
-6. **The clock.** `now` is injectable for testing. Time budgets and sliding windows trust it.
+4. **The audit file's storage, and the anchor's.** Tamper-*evident*, not tamper-*proof*. An anchor file the agent can rewrite is decoration: it will be truncated alongside the log it was supposed to witness. See below.
+5. **The sidecar's placement.** `leash run` mediates only what is routed through it. Same user, same host, shell access — and the agent can kill it or go around it.
+6. **The `onAsk` handler.** It is the human-in-the-loop. If it auto-approves, or is reachable by the agent, the `ask` effect is decorative.
+7. **The `onWarn` handler.** A plan's thresholds only reach a human if it delivers. The chain records that a threshold fired regardless, which is the backstop.
+8. **The clock.** `now` is injectable for testing. Time budgets and sliding windows trust it.
 
 The model is explicitly **outside** the trust boundary. That is the design: model output is untrusted input to a deterministic check. Nothing the model says influences the decision except the tool name and the arguments, and those are evaluated, not interpreted.
 
@@ -138,17 +172,64 @@ Be precise about what the hash chain buys.
 
 **What it does not prove.** An attacker with write access to the file can recompute the *entire chain* after altering an entry, and the result verifies perfectly. Nothing inside the file distinguishes an honest chain from a consistently forged one. A hash chain proves internal consistency; it does not by itself prove authenticity or completeness.
 
-**What closes the gap: anchoring.** The chain becomes evidence only when the head hash is committed somewhere the attacker does not control. Options, roughly in ascending order of effort:
+### Truncation is undetectable from the file alone
 
-- **Append-only storage.** Write the JSONL to a WORM bucket, an object store with object-lock or versioning enabled, or a filesystem where the agent's user has append-only permission. This removes the write access the attack depends on.
+This deserves its own heading, because it is the failure people do not expect and it needs no forgery at all.
+
+**Verifying a chain in isolation cannot detect that its tail was cut off.** A prefix of a valid chain *is* a valid chain: entries 1..k of an honest log have correct hashes, correct `prev` links and correct sequence numbers. An agent that deletes its last twenty entries — the ones covering the calls you care about — hands you a file that verifies clean and exits `0`:
+
+```
+leash verify truncated.jsonl
+ok: 6 entries verified
+head: 4cd48e58f9b83f20a143534960983d5d72062507d8c356b35b2292845ce479cd
+```
+
+Three tool calls and both budget warnings are missing from that file, and nothing inside it says so. No amount of re-verifying finds them, because there is nothing left in the file that ever referred to them. Truncation is the cheapest attack on a hash chain and the only one that requires no cryptography.
+
+**What closes it is a receipt issued at the time, held elsewhere.** `leash anchor audit.jsonl --to anchors.jsonl` appends one line — a run receipt, including the head hash — to an append-only file. `leash verify --against` then runs two checks and reports them separately, because only the second can catch a truncation and an operator needs to see which failed:
+
+```
+leash verify truncated.jsonl --against anchors.jsonl
+ok: chain check — 6 entries verified
+FAILED: anchor check — log does not match the anchored receipt (6 entries read)
+  seq:    6
+  reason: broken-link
+  detail: chain head 4cd48e58f9b8 does not match the receipt's head 6a5900e53578 (6 entries present, receipt recorded 9)
+```
+
+The head quoted at the time cannot be reached by any shorter or rewritten chain — that is the whole property. A run with no anchor at all fails rather than passing quietly:
+
+```
+FAILED: anchor check — no receipt for run "nightly-2026-09-12" in anchors.jsonl
+  detail: an unanchored run cannot be shown to be complete
+```
+
+Anchor more than once for a long run — mid-run and again at the end. The last receipt for a run wins, being the strongest claim about how far the chain got, and every earlier line remains in the file as an independent witness to a lower bound. `anchor` refuses to write at all if the chain does not verify, so an anchor file never certifies a broken log.
+
+### Where to put the anchor
+
+The chain becomes evidence only when the head hash is committed somewhere the attacker does not control. Options, roughly in ascending order of effort:
+
+- **Append-only storage.** Write the JSONL to a WORM bucket, an object store with object-lock or versioning enabled, or a filesystem where the agent's user has append-only permission. This removes the write access the attack depends on. Note that append-only storage defeats *editing*, but a log that is merely appended to is still only as complete as the last entry written — pair it with an anchor if truncation matters.
 - **Ship it as it is written.** Stream entries to a log pipeline (syslog, a SIEM, a hosted log service) under credentials the agent process does not hold. The copy on the other side is the witness. JSONL exists partly so this is a one-line change.
+- **Anchor the receipt to a path the agent cannot rewrite.** `leash anchor audit.jsonl --to /mnt/worm/anchors.jsonl`, where the mount is append-only for the agent's user, or a directory on another host. One command, run at end of run, plus `leash verify --against` when the log is later reviewed.
 - **Periodically publish the head.** `leash.head()` is a single 64-character string. Post it to a channel with its own retention — a ticket, a chat log, a monitoring metric, an email to yourself — every N calls or at end of run. Anyone can later check that the file's head still matches what was published at the time.
 - **Sign the head.** Sign `head()` with a key the agent process cannot read (an HSM, a KMS, a separate signing service). This adds authenticity to the integrity the chain already provides.
 - **External timestamping.** An RFC 3161 timestamp authority, a transparency log, or a public ledger. Strongest, and the most operational overhead. Worth it when the log is meant to convince a party who does not trust you at all.
 
 Choose by asking who has to be convinced. For internal debugging, the chain alone is fine. For a customer dispute, publish the head. For a regulator, anchor it somewhere neither of you controls.
 
+### The part Leash cannot enforce
+
+**An anchor is only worth something where the agent cannot rewrite it.** An `anchors.jsonl` sitting next to `audit.jsonl`, writable by the same process, buys nothing: an attacker who truncates one truncates the other, and both still agree. This is the most common way to deploy anchoring and get no security from it.
+
+Leash cannot enforce where the anchor goes. It has no privilege boundary to enforce it with — it is a library in the agent's own process, or a sidecar the agent's host launched. **All it can do is make putting the anchor somewhere safe a single command.** Where that is, and whether the agent's credentials reach it, is your deployment's problem and not the library's.
+
 **A second, quieter gap: completeness.** The chain proves entries were not modified. It does not prove entries were *made* — a call routed around `guard()` never enters the log, and the log will verify cleanly without it. This is why the integration matters: one code path to the tools, and `guard()` on it. Wrapping the dispatcher (or using `leash run` in front of an MCP server, where the process boundary enforces it) is more robust than wrapping call sites one at a time.
+
+**Where the sidecar runs decides whether any of this holds.** `leash run` is a process, and the process boundary is only a boundary if the agent is on the other side of it. An agent that has shell access on the same host and under the same user can kill the proxy, start the downstream MCP server itself and talk to it directly, edit the policy file, or truncate the audit and anchor files together. Nothing in the proxy prevents any of that; it is a mediator, not a jailer.
+
+So the sidecar has to run **outside the agent's blast radius**: a different user with the policy file read-only to the agent's, a different container with the tool server reachable only through the proxy, or a different host. This is the same requirement as the anchor's, for the same reason — a control the adversary can rewrite is not a control — and Leash cannot enforce either one. Isolation is a separate control that you still need; what Leash adds is that once it is in place, everything that crosses the boundary is decided deterministically and written down.
 
 ---
 
