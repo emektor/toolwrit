@@ -46,7 +46,7 @@ describe('run plan: the approved envelope is recorded first', () => {
     assert.deepEqual(first?.args['budget'], { calls: 10 });
     // Zero usage at the moment of approval is the point: the envelope is
     // committed before the run can spend against it.
-    assert.deepEqual(first?.usage, { calls: 0, tokens: 0, usd: 0 });
+    assert.deepEqual(first?.usage, { calls: 0, tokens: 0, usd: 0, bytes: 0 });
   });
 
   it('records the defaults it will actually use, not an empty field', () => {

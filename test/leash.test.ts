@@ -65,7 +65,7 @@ describe('Leash: construction', () => {
 
   it('starts with empty usage, no entries and head() at GENESIS', () => {
     const l = new Leash({ policy: ALLOW_FS, now: frozenClock() });
-    assert.deepEqual(l.usage(), { calls: 0, tokens: 0, usd: 0, startedAt: null });
+    assert.deepEqual(l.usage(), { calls: 0, tokens: 0, usd: 0, bytes: 0, startedAt: null });
     assert.deepEqual(l.entries(), []);
     assert.equal(l.head(), GENESIS);
   });
@@ -108,9 +108,9 @@ describe('Leash.guard: allow', () => {
   it('increments usage().calls and starts the clock at the call time', async () => {
     const l = new Leash({ policy: ALLOW_FS, now: fixedClock(at(0), at(5)) });
     await l.guard('fs.read', { path: '/tmp/a' }, () => 1);
-    assert.deepEqual(l.usage(), { calls: 1, tokens: 0, usd: 0, startedAt: at(0) });
+    assert.deepEqual(l.usage(), { calls: 1, tokens: 0, usd: 0, bytes: 1, startedAt: at(0) });
     await l.guard('fs.read', { path: '/tmp/b' }, () => 1);
-    assert.deepEqual(l.usage(), { calls: 2, tokens: 0, usd: 0, startedAt: at(0) });
+    assert.deepEqual(l.usage(), { calls: 2, tokens: 0, usd: 0, bytes: 2, startedAt: at(0) });
   });
 
   it('records the decision before executing, so a thrown tool still leaves evidence', async () => {
@@ -134,7 +134,7 @@ describe('Leash.guard: allow', () => {
     assert.deepEqual(entry!.args, { path: '/tmp/x' });
     assert.equal(entry!.at, at(3));
     assert.equal(entry!.decision.rule, 'fs-read');
-    assert.deepEqual(entry!.usage, { calls: 0, tokens: 0, usd: 0 }, 'usage is captured as of the decision');
+    assert.deepEqual(entry!.usage, { calls: 0, tokens: 0, usd: 0, bytes: 0 }, 'usage is captured as of the decision');
   });
 });
 
@@ -160,7 +160,7 @@ describe('Leash.guard: deny', () => {
   it('does NOT increment the call counter but DOES record the refusal', async () => {
     const l = new Leash({ policy: ALLOW_FS, now: frozenClock() });
     await denied(() => l.guard('shell.exec', {}, () => 1));
-    assert.deepEqual(l.usage(), { calls: 0, tokens: 0, usd: 0, startedAt: null });
+    assert.deepEqual(l.usage(), { calls: 0, tokens: 0, usd: 0, bytes: 0, startedAt: null });
     assert.equal(l.entries().length, 1);
     assert.equal(l.entries()[0]!.decision.effect, 'deny');
   });
@@ -306,7 +306,7 @@ describe('Leash: metering and budgets', () => {
   it('meter() without a price table records tokens at zero cost', () => {
     const l = new Leash({ policy: ALLOW_FS, now: frozenClock() });
     l.meter(10, 20);
-    assert.deepEqual(l.usage(), { calls: 0, tokens: 30, usd: 0, startedAt: T0 });
+    assert.deepEqual(l.usage(), { calls: 0, tokens: 30, usd: 0, bytes: 0, startedAt: T0 });
   });
 
   it('spend() adds usd and accumulates', () => {

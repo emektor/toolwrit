@@ -56,6 +56,30 @@ export interface LeashOptions {
 /** Warn thresholds used when a plan does not name its own. */
 const DEFAULT_WARN_AT = [0.8, 0.95];
 
+/**
+ * Size of a tool result, in bytes.
+ *
+ * Deterministic by construction: the same result always measures the same, so
+ * a replayed audit log reaches the same verdict. A result we cannot serialise
+ * (a cycle, a class with a throwing toJSON) falls back to its string form and
+ * is therefore UNDER-counted -- documented rather than hidden, because
+ * under-counting a volume ceiling fails open.
+ */
+function sizeOf(result: unknown): number {
+  if (result === null || result === undefined) return 0;
+  if (typeof result === 'string') return Buffer.byteLength(result, 'utf8');
+  if (ArrayBuffer.isView(result)) return result.byteLength;
+  if (result instanceof ArrayBuffer) return result.byteLength;
+
+  try {
+    const json = JSON.stringify(result);
+    // stringify returns undefined for a function or a lone symbol.
+    return json === undefined ? 0 : Buffer.byteLength(json, 'utf8');
+  } catch {
+    return Buffer.byteLength(String(result), 'utf8');
+  }
+}
+
 /** Readable numbers in warning text: 12500 -> "12,500", 1.5 -> "1.5". */
 function format(value: number): string {
   return Number.isInteger(value) ? value.toLocaleString('en-US') : value.toFixed(2);
@@ -92,7 +116,7 @@ export class Leash {
           warnAt: plan.warnAt ?? DEFAULT_WARN_AT,
         }),
         { effect: 'allow', rule: 'plan', reason: 'run plan recorded', violations: [] },
-        { calls: 0, tokens: 0, usd: 0 }
+        { calls: 0, tokens: 0, usd: 0, bytes: 0 }
       );
     }
   }
@@ -140,8 +164,15 @@ export class Leash {
     }
 
     this.ledger.countCall(call.at);
+    const result = await execute();
+    // The volume half of containment. Measured after the fact because a
+    // result's size is not knowable before the tool produces it.
+    // Attributed to the call's own timestamp rather than a fresh clock read:
+    // the bytes belong to that call, and reading the clock again here would
+    // make the ledger depend on how long the tool happened to take.
+    this.ledger.addBytes(sizeOf(result), call.at);
     this.reportProgress();
-    return execute();
+    return result;
   }
 
   /** Record model consumption against the budget. Call after every model turn. */
@@ -175,6 +206,7 @@ export class Leash {
       ['calls', usage.calls, budget.calls],
       ['tokens', usage.tokens, budget.tokens],
       ['usd', usage.usd, budget.usd],
+      ['bytes', usage.bytes, budget.bytes],
       ['seconds', elapsed, budget.seconds],
     ];
 
@@ -201,7 +233,7 @@ export class Leash {
         this.audit.record(
           this.toCall('leash:warning', { ...warning }),
           { effect: 'allow', rule: 'plan', reason: warning.message, violations: [] },
-          { calls: usage.calls, tokens: usage.tokens, usd: usage.usd }
+          { calls: usage.calls, tokens: usage.tokens, usd: usage.usd, bytes: usage.bytes }
         );
         this.options.onWarn?.(warning);
       }
@@ -262,7 +294,7 @@ export class Leash {
   }
 
   private usageForAudit() {
-    const { calls, tokens, usd } = this.ledger.snapshot();
-    return { calls, tokens, usd };
+    const { calls, tokens, usd, bytes } = this.ledger.snapshot();
+    return { calls, tokens, usd, bytes };
   }
 }

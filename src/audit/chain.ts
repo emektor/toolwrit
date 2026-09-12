@@ -30,7 +30,7 @@ export interface AuditEntry {
   args: Record<string, unknown>;
   decision: Decision;
   /** Budget consumption at the moment of the decision. */
-  usage: Pick<BudgetUsage, 'calls' | 'tokens' | 'usd'>;
+  usage: Pick<BudgetUsage, 'calls' | 'tokens' | 'usd' | 'bytes'>;
   /** Hash of the preceding entry, or GENESIS. */
   prev: string;
   /** sha256 over the canonical form of this entry, excluding `hash` itself. */

@@ -27,6 +27,20 @@ export interface BudgetLimits {
   tokens?: number;
   /** Hard ceiling on estimated spend, in USD. */
   usd?: number;
+  /**
+   * Hard ceiling on bytes returned BY tools across the run.
+   *
+   * This is the volume half of containment, and it catches a different attack
+   * from the rules. Bulk exfiltration is rarely a forbidden action; it is a
+   * permitted action repeated until it has drained something. Every individual
+   * read passes the allowlist, and only the total gives it away.
+   *
+   * Note the ordering this imposes: a result's size cannot be known before the
+   * tool runs, so a call that blows the ceiling completes and the NEXT one is
+   * refused. A bytes ceiling therefore bounds a run at roughly the limit plus
+   * one call's worth, not exactly the limit.
+   */
+  bytes?: number;
   /** Wall-clock ceiling for the run, in seconds, measured from the first call. */
   seconds?: number;
 }
@@ -36,6 +50,8 @@ export interface BudgetUsage {
   calls: number;
   tokens: number;
   usd: number;
+  /** Bytes returned by tools so far. See BudgetLimits.bytes. */
+  bytes: number;
   /** Milliseconds since epoch of the first metered event, or null before it. */
   startedAt: number | null;
 }
@@ -132,7 +148,7 @@ export interface RunPlan {
 /** Emitted when consumption crosses one of the plan's warn thresholds. */
 export interface BudgetWarning {
   /** Which budget dimension crossed. */
-  dimension: 'calls' | 'tokens' | 'usd' | 'seconds';
+  dimension: 'calls' | 'tokens' | 'usd' | 'seconds' | 'bytes';
   /** The threshold that fired, as a fraction of the limit. */
   threshold: number;
   /** Consumption and ceiling for that dimension. */

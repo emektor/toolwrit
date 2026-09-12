@@ -21,7 +21,7 @@ const EFFECTS = new Set(['allow', 'deny', 'ask']);
 const POLICY_KEYS = new Set(['version', 'name', 'default', 'budget', 'plan', 'rules']);
 const PLAN_KEYS = new Set(['purpose', 'approvedBy', 'warnAt']);
 const RULE_KEYS = new Set(['id', 'description', 'tools', 'effect', 'when', 'limit']);
-const BUDGET_KEYS = new Set(['calls', 'tokens', 'usd', 'seconds']);
+const BUDGET_KEYS = new Set(['calls', 'tokens', 'usd', 'bytes', 'seconds']);
 const LIMIT_KEYS = new Set(['max', 'perSeconds']);
 const CONSTRAINT_KEYS = new Set([
   'optional', 'oneOf', 'noneOf', 'matches', 'startsWith', 'excludes',

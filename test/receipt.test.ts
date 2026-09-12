@@ -73,7 +73,7 @@ describe('summarize: a plain run', () => {
 describe('summarize: a run with a plan', () => {
   const planned: Policy = policy({
     default: 'allow',
-    budget: { calls: 10, tokens: 1000, usd: 2 },
+    budget: { calls: 10, tokens: 1000, usd: 2, bytes: 0 },
     plan: { purpose: 'nightly sync', approvedBy: 'ergin', warnAt: [0.5] },
   });
 
@@ -89,7 +89,7 @@ describe('summarize: a run with a plan', () => {
     assert.deepEqual(receipt.plan, {
       purpose: 'nightly sync',
       approvedBy: 'ergin',
-      budget: { calls: 10, tokens: 1000, usd: 2 },
+      budget: { calls: 10, tokens: 1000, usd: 2, bytes: 0 },
       warnAt: [0.5],
     });
   });
@@ -107,7 +107,7 @@ describe('summarize: a run with a plan', () => {
 
   it('reports each dimension as a fraction of its ceiling', () => {
     const receipt = summarize(plannedRun().entries());
-    assert.deepEqual(receipt.usage, { calls: 0, tokens: 600, usd: 1.5 });
+    assert.deepEqual(receipt.usage, { calls: 0, tokens: 600, usd: 1.5, bytes: 0 });
     assert.deepEqual(receipt.consumed, { calls: 0, tokens: 0.6, usd: 0.75 });
   });
 
@@ -240,7 +240,7 @@ describe('summarize: the empty chain', () => {
       head: GENESIS,
       chainOk: true,
       plan: null,
-      usage: { calls: 0, tokens: 0, usd: 0 },
+      usage: { calls: 0, tokens: 0, usd: 0, bytes: 0 },
       consumed: null,
       allowed: 0,
       denied: 0,

@@ -18,7 +18,7 @@ export interface TokenPrice {
 }
 
 export class Ledger {
-  private usage: BudgetUsage = { calls: 0, tokens: 0, usd: 0, startedAt: null };
+  private usage: BudgetUsage = { calls: 0, tokens: 0, usd: 0, bytes: 0, startedAt: null };
 
   /** Snapshot for the engine. Returned by value so callers cannot mutate state. */
   snapshot(): BudgetUsage {
@@ -53,6 +53,17 @@ export class Ledger {
     this.addTokens(input + output, usd, at);
   }
 
+  /**
+   * Record the size of a tool result.
+   *
+   * Called after the tool has run, because the size of what comes back is not
+   * knowable before it does.
+   */
+  addBytes(bytes: number, at = Date.now()): void {
+    this.start(at);
+    this.usage.bytes += bytes;
+  }
+
   /** Record spend that is not token-denominated, e.g. a paid API call. */
   addSpend(usd: number, at = Date.now()): void {
     this.start(at);
@@ -61,7 +72,7 @@ export class Ledger {
 
   /** Reset every counter. Used between runs when a process is long-lived. */
   reset(): void {
-    this.usage = { calls: 0, tokens: 0, usd: 0, startedAt: null };
+    this.usage = { calls: 0, tokens: 0, usd: 0, bytes: 0, startedAt: null };
   }
 
   /** The time budget starts at the first metered event, not at construction. */

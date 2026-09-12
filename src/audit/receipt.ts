@@ -40,6 +40,7 @@ export interface ReceiptConsumed {
   calls?: number;
   tokens?: number;
   usd?: number;
+  bytes?: number;
 }
 
 export interface RunReceipt {
@@ -56,7 +57,7 @@ export interface RunReceipt {
   /** The approved envelope, when the run declared one. */
   plan: ReceiptPlan | null;
   /** Consumption as last recorded in the chain. */
-  usage: { calls: number; tokens: number; usd: number };
+  usage: { calls: number; tokens: number; usd: number; bytes: number };
   /** Usage over the plan's budget, per dimension. Null without a declared budget. */
   consumed: ReceiptConsumed | null;
   allowed: number;
@@ -124,6 +125,7 @@ export function summarize(entries: readonly AuditEntry[]): RunReceipt {
     calls: allowed,
     tokens: last?.usage.tokens ?? 0,
     usd: last?.usage.usd ?? 0,
+    bytes: last?.usage.bytes ?? 0,
   };
 
   return {
@@ -198,11 +200,11 @@ export function verifyAgainstReceipt(
 }
 
 function fractions(
-  usage: { calls: number; tokens: number; usd: number },
+  usage: { calls: number; tokens: number; usd: number; bytes: number },
   budget: BudgetLimits
 ): ReceiptConsumed {
   const consumed: ReceiptConsumed = {};
-  for (const dimension of ['calls', 'tokens', 'usd'] as const) {
+  for (const dimension of ['calls', 'tokens', 'usd', 'bytes'] as const) {
     const limit = budget[dimension];
     // A zero or absent limit has no meaningful fraction; reporting 0 or
     // Infinity there would read as "plenty of room left".

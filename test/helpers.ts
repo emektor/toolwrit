@@ -50,7 +50,7 @@ export function call(
 }
 
 export function usage(partial: Partial<BudgetUsage> = {}): BudgetUsage {
-  return { calls: 0, tokens: 0, usd: 0, startedAt: null, ...partial };
+  return { calls: 0, tokens: 0, usd: 0, bytes: 0, startedAt: null, ...partial };
 }
 
 export function policy(partial: Partial<Policy> = {}): Policy {

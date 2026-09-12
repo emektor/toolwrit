@@ -142,6 +142,12 @@ function checkBudget(call: ToolCall, ctx: EvalContext): Violation | null {
   if (limits.usd !== undefined && usage.usd >= limits.usd) {
     return over('usd', `spend budget exhausted: $${usage.usd.toFixed(4)}/$${limits.usd.toFixed(4)} used`);
   }
+  if (limits.bytes !== undefined && usage.bytes >= limits.bytes) {
+    return over(
+      'bytes',
+      `data budget exhausted: ${usage.bytes}/${limits.bytes} bytes returned by tools`
+    );
+  }
   if (limits.seconds !== undefined && usage.startedAt !== null) {
     const elapsed = (call.at - usage.startedAt) / 1000;
     if (elapsed >= limits.seconds) {
