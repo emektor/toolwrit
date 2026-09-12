@@ -87,6 +87,22 @@ class CliError(Exception):
     """Errors we raise ourselves, and can therefore report without a traceback."""
 
 
+def _reject_unknown_flags(
+    parsed: ParsedArgs, allowed: Sequence[str], subcommand: str
+) -> None:
+    """
+    Refuse a flag this subcommand does not implement.
+
+    A mistyped or unsupported flag that is quietly dropped turns into a check
+    the operator believes ran and did not, which is the same class of mistake
+    the policy loader refuses to make with an unknown policy field.
+    """
+    unknown = sorted(set(parsed.flags) - set(allowed) - {"help", "version"})
+    if unknown:
+        names = ", ".join(f'"--{flag}"' for flag in unknown)
+        raise CliError(f"unknown flag(s) {names} for `leash {subcommand}`")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parsed = parse_args(argv)
@@ -121,6 +137,19 @@ def _cmd_verify(parsed: ParsedArgs) -> int:
     file = parsed.positional[1] if len(parsed.positional) > 1 else None
     if not file:
         raise CliError("verify needs an audit file, e.g. `leash verify audit.jsonl`")
+
+    # Silently ignoring an unimplemented flag would be a fail-open in the one
+    # command whose job is detecting tampering: `verify --against` exists to
+    # catch a truncated log, and a run that prints "ok" and exits 0 without
+    # having performed the anchor check is worse than no check at all.
+    if "against" in parsed.flags:
+        raise CliError(
+            "`verify --against <anchor>` is not implemented in the Python CLI; "
+            "the chain check alone cannot detect a truncated log, so use the "
+            "TypeScript CLI (`leash verify <file> --against <anchor>`) rather "
+            "than reading this run as a pass"
+        )
+    _reject_unknown_flags(parsed, (), "verify")
 
     try:
         result = verify_file(file)

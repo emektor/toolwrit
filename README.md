@@ -4,8 +4,19 @@ A deterministic leash for AI agents. Allowlist the tools, cap the budget, prove
 what happened.
 
 This is a Python port of [Leash](../leash). **The full documentation lives in
-the main project's [README](../leash/README.md)** — the policy language, the
-threat model and the design rationale are the same here, clause for clause.
+the main project's docs** — the policy language, the threat model and the
+design rationale are the same here, clause for clause:
+
+- [`leash/README.md`](../leash/README.md) — the overview, run plans, the bytes
+  ceiling, receipts and anchoring.
+- [`leash/docs/policy-reference.md`](../leash/docs/policy-reference.md) — every
+  policy field with a worked example.
+- [`leash/docs/threat-model.md`](../leash/docs/threat-model.md) — what is and is
+  not defended against.
+- [`leash/docs/python.md`](../leash/docs/python.md) — the Python-specific
+  reference: the full API table, the sync/async split, and everything below in
+  more detail.
+
 What follows is only what a Python user needs on top of that.
 
 ```bash
@@ -22,8 +33,9 @@ try:
 except LeashDenied as denied:
     print(denied.decision.reason, denied.audit_hash)
 
-leash.meter(input_tokens=1200, output_tokens=350)
-print(leash.head())   # the receipt for the run so far
+leash.meter(1200, 350)          # input tokens, output tokens
+print(leash.usage())            # BudgetUsage(calls=…, tokens=…, usd=…, bytes=…, started_at=…)
+print(leash.head())             # the head of this run's audit chain
 ```
 
 ```bash
@@ -31,6 +43,118 @@ leash check   --policy policy.yaml --tool fs.read --args '{"path":"/tmp/x"}'
 leash explain --policy policy.yaml
 leash verify  audit.jsonl
 ```
+
+## Run plans
+
+A `plan:` block declares the envelope a run is approved for, and it works here
+exactly as it does in TypeScript.
+
+```yaml
+budget:
+  calls: 200
+  usd: 5.00
+  bytes: 20000000
+  seconds: 3600
+
+plan:
+  purpose: nightly CRM export for the EU region
+  approvedBy: ergin
+  warnAt: [0.8, 0.95]     # the default
+```
+
+The argument for declaring an envelope rather than setting a global threshold:
+a global threshold has to guess at every job at once, so it is either too loose
+to catch anything or too tight to leave switched on — and an alert people mute
+is the same as no alert. A declared envelope does not guess. Approve once at
+the start, hear nothing until a threshold.
+
+```python
+leash = Leash(
+    load_policy_file("export.yaml"),
+    run="nightly-2026-09-12",
+    audit_file="audit.jsonl",
+    on_warn=lambda w: print("on_warn ->", w.message),
+)
+```
+
+```
+on_warn -> run "nightly-2026-09-12" (nightly CRM export for the EU region) has used 16,000,000/20,000,000 bytes — 80% of the approved envelope
+```
+
+Two properties worth knowing:
+
+- **The plan is entry 1 of the audit chain**, written by the constructor before
+  anything can be guarded. What was *authorised* is in the tamper-evident record
+  alongside what happened.
+- **Each threshold fires at most once per dimension**, across `calls`, `tokens`,
+  `usd`, `bytes` and `seconds`, and every warning is recorded in the chain as a
+  `leash:warning` entry as well as delivered to `on_warn`. Keep `on_warn`
+  non-blocking; it runs inline with metering.
+
+A `plan` requires a `budget` to measure against, `purpose` must be non-empty,
+and `warnAt` entries must be greater than 0 and at most 1. All three are load
+errors, with the same messages as the TypeScript implementation.
+
+## The bytes ceiling
+
+`budget.bytes` caps the total size of what tools **return** over a run. Bulk
+exfiltration is rarely a forbidden action — it is a permitted action repeated
+until something is drained, so every individual call passes the allowlist and
+only the running total gives it away. Unlike `usd` and `tokens`, this dimension
+needs no cooperation from your integration: `guard` and `guard_async` feed it.
+
+```
+call 5: ok, bytes now 20000000
+call 6: leash: crm.search denied — data budget exhausted: 20000000/20000000 bytes returned by tools
+```
+
+**The limitation, stated up front.** A result's size is not knowable before the
+tool runs, so the measurement happens afterwards: the call that blows the
+ceiling **completes**, and the **next** one is refused. A bytes ceiling bounds a
+run at the limit *plus one call*, never exactly the limit. If one call can
+return everything, cap the response at the tool.
+
+Sizes: `None` → 0; `str` → its UTF-8 byte length; `bytes`/`bytearray`/
+`memoryview` → their length; anything else → the UTF-8 byte length of its
+canonical JSON, which equals what TypeScript gets from `JSON.stringify`. A
+result that cannot be serialised falls back to `str(result)` and is therefore
+**under-counted** — documented rather than hidden, because under-counting a
+volume ceiling fails open.
+
+## Receipts and anchoring: use the TypeScript CLI
+
+Run receipts (`summarize`, `verifyAgainstReceipt`) and the `leash receipt`,
+`leash anchor` and `leash verify --against` subcommands are **not ported**.
+Because the chains are compatible, that is not a blocker — point the TypeScript
+CLI at a Python-written log:
+
+```bash
+leash receipt audit.jsonl                        # written by shortleash for Python
+leash anchor  audit.jsonl --to anchors.jsonl
+leash verify  audit.jsonl --against anchors.jsonl
+```
+
+This matters more than it sounds. Verifying a chain in isolation **cannot**
+detect that its tail was cut off: a prefix of a valid chain is itself a valid
+chain and verifies clean, so an agent that deletes its last twenty entries hands
+you a log that passes. Comparing against a receipt anchored at the time closes
+that hole — and only if the anchor lives where the agent cannot rewrite it,
+which Leash cannot enforce.
+
+The Python `leash verify` **refuses** `--against` rather than ignoring it:
+
+```
+$ leash verify truncated.jsonl --against anchors.jsonl
+leash: `verify --against <anchor>` is not implemented in the Python CLI; ...
+$ echo $?
+1
+```
+
+Accepting the flag and dropping it would print `ok` and exit 0 on precisely the
+truncated log the flag exists to catch — a fail-open in the one command whose
+job is detecting tampering. Every subcommand rejects flags it does not
+implement for the same reason. Use the TypeScript CLI for anchoring; it reads
+chains written here.
 
 ## Chain compatibility
 
@@ -74,6 +198,11 @@ tool, an async `on_ask` handler, or plain functions unchanged. Passing an async
 **`leash run` is not ported.** The MCP stdio proxy and the Anthropic/OpenAI SDK
 adapters stay in the TypeScript package; `leash run` here exits 1 and says so.
 `check`, `explain` and `verify` behave identically, exit codes included.
+
+**Run receipts and anchoring are not ported.** There is no `summarize` or
+`verify_against_receipt`, and no `receipt`, `anchor` or working `verify
+--against` in this CLI. Use the TypeScript CLI over the Python-written log; see
+the section above.
 
 **Regexes are Python regexes.** A `matches:` pattern is compiled with `re`, not
 V8's `RegExp`. The common syntax is shared, but the dialects diverge on named
