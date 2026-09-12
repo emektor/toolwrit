@@ -52,7 +52,7 @@ class TestTheApprovedEnvelopeIsRecordedFirst:
         assert first.args["budget"] == {"calls": 10}
         # Zero usage at the moment of approval is the point: the envelope is
         # committed before the run can spend against it.
-        assert first.usage == {"calls": 0, "tokens": 0, "usd": 0}
+        assert first.usage == {"calls": 0, "tokens": 0, "usd": 0, "bytes": 0}
 
     def test_records_the_defaults_it_will_actually_use(self) -> None:
         leash, _ = collect(make_policy("  purpose: p"))

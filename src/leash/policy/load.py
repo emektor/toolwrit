@@ -43,7 +43,7 @@ EFFECTS: Final[frozenset[str]] = frozenset({"allow", "deny", "ask"})
 _POLICY_KEYS: Final = ("version", "name", "default", "budget", "plan", "rules")
 _PLAN_KEYS: Final = ("purpose", "approvedBy", "warnAt")
 _RULE_KEYS: Final = ("id", "description", "tools", "effect", "when", "limit")
-_BUDGET_KEYS: Final = ("calls", "tokens", "usd", "seconds")
+_BUDGET_KEYS: Final = ("calls", "tokens", "usd", "bytes", "seconds")
 _LIMIT_KEYS: Final = ("max", "perSeconds")
 _CONSTRAINT_KEYS: Final = (
     "optional", "oneOf", "noneOf", "matches", "startsWith", "excludes",

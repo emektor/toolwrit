@@ -20,7 +20,7 @@ import uuid
 from collections.abc import Mapping
 from typing import Any, Awaitable, Callable, Sequence, TypeVar
 
-from .audit.chain import AuditEntry, AuditLog
+from .audit.chain import AuditEntry, AuditLog, canonicalize
 from .budget.ledger import Ledger, TokenPrice, now_ms
 from ._js import js_locale_integer, js_number, js_round, js_to_fixed, to_jsonable
 from .policy.engine import evaluate
@@ -54,6 +54,31 @@ class LeashDenied(Exception):
         self.decision = decision
         #: Hash of the audit entry recording the refusal. Quote it in support tickets.
         self.audit_hash = audit_hash
+
+
+def size_of(result: Any) -> int:
+    """
+    Size of a tool result, in bytes.
+
+    Deterministic by construction: the same result always measures the same, so
+    a replayed audit log reaches the same verdict. Structured results are
+    measured by their canonical JSON length, which equals what the TypeScript
+    implementation gets from JSON.stringify -- sorting keys reorders bytes but
+    does not add or remove any. A result that cannot be serialised falls back to
+    its string form and is therefore UNDER-counted: documented rather than
+    hidden, because under-counting a volume ceiling fails open.
+    """
+    if result is None:
+        return 0
+    if isinstance(result, str):
+        return len(result.encode("utf-8"))
+    if isinstance(result, (bytes, bytearray, memoryview)):
+        return len(bytes(result))
+
+    try:
+        return len(canonicalize(result).encode("utf-8"))
+    except Exception:
+        return len(str(result).encode("utf-8"))
 
 
 def _format(value: float) -> str:
@@ -109,7 +134,7 @@ class Leash:
                     reason="run plan recorded",
                     violations=[],
                 ),
-                {"calls": 0, "tokens": 0, "usd": 0},
+                {"calls": 0, "tokens": 0, "usd": 0, "bytes": 0},
             )
 
     def check(self, tool: str, args: dict[str, Any] | None = None) -> Decision:
@@ -149,7 +174,7 @@ class Leash:
             decision = self._resolve_ask(decision, approved)
 
         self._enforce(tool, call, decision)
-        return execute()
+        return self._measure(call, execute())
 
     async def guard_async(
         self,
@@ -170,8 +195,8 @@ class Leash:
         self._enforce(tool, call, decision)
         result = execute()
         if inspect.isawaitable(result):
-            return await result
-        return result  # type: ignore[return-value]
+            result = await result
+        return self._measure(call, result)  # type: ignore[arg-type]
 
     def meter(
         self,
@@ -220,7 +245,17 @@ class Leash:
         if decision.effect != "allow":
             raise LeashDenied(tool, decision, entry.hash)
         self._ledger.count_call(call.at)
+
+    def _measure(self, call: ToolCall, result: T) -> T:
+        """
+        The volume half of containment: record how much the tool returned.
+
+        Attributed to the call's own timestamp rather than a fresh clock read,
+        so the ledger does not depend on how long the tool happened to take.
+        """
+        self._ledger.add_bytes(size_of(result), call.at)
         self._report_progress()
+        return result
 
     def _ask(self, call: ToolCall, decision: Decision) -> Any:
         return None if self._on_ask is None else self._on_ask(call, decision)
@@ -285,6 +320,7 @@ class Leash:
             ("calls", usage.calls, budget.calls),
             ("tokens", usage.tokens, budget.tokens),
             ("usd", usage.usd, budget.usd),
+            ("bytes", usage.bytes, budget.bytes),
             ("seconds", elapsed, budget.seconds),
         ]
 
@@ -328,7 +364,12 @@ class Leash:
                         reason=warning.message,
                         violations=[],
                     ),
-                    {"calls": usage.calls, "tokens": usage.tokens, "usd": usage.usd},
+                    {
+                        "calls": usage.calls,
+                        "tokens": usage.tokens,
+                        "usd": usage.usd,
+                        "bytes": usage.bytes,
+                    },
                 )
                 if self._on_warn is not None:
                     self._on_warn(warning)
@@ -338,4 +379,9 @@ class Leash:
 
     def _usage_for_audit(self) -> dict[str, float]:
         usage = self._ledger.snapshot()
-        return {"calls": usage.calls, "tokens": usage.tokens, "usd": usage.usd}
+        return {
+            "calls": usage.calls,
+            "tokens": usage.tokens,
+            "usd": usage.usd,
+            "bytes": usage.bytes,
+        }

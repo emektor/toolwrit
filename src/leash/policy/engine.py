@@ -179,6 +179,12 @@ def _check_budget(call: ToolCall, ctx: EvalContext) -> Violation | None:
             f"spend budget exhausted: ${js_to_fixed(usage.usd, 4)}/"
             f"${js_to_fixed(limits.usd, 4)} used",
         )
+    if limits.bytes is not None and usage.bytes >= limits.bytes:
+        return over(
+            "bytes",
+            f"data budget exhausted: {js_number(usage.bytes)}/"
+            f"{js_number(limits.bytes)} bytes returned by tools",
+        )
     if limits.seconds is not None and usage.started_at is not None:
         elapsed = (call.at - usage.started_at) / 1000
         if elapsed >= limits.seconds:

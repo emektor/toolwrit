@@ -141,7 +141,7 @@ class TestGuardAllow:
         assert entry.args == {"path": "/tmp/x"}
         assert entry.at == at(3)
         assert entry.decision.rule == "fs-read"
-        assert entry.usage == {"calls": 0, "tokens": 0, "usd": 0}, "usage as of the decision"
+        assert entry.usage == {"calls": 0, "tokens": 0, "usd": 0, "bytes": 0}, "usage as of the decision"
 
 
 class TestGuardDeny:

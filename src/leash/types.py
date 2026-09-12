@@ -41,7 +41,7 @@ class BudgetLimits:
     """What a run is allowed to consume before Leash cuts it off."""
 
     JSON_OMIT_IF_NONE: ClassVar[frozenset[str]] = frozenset(
-        {"calls", "tokens", "usd", "seconds"}
+        {"calls", "tokens", "usd", "bytes", "seconds"}
     )
 
     #: Hard ceiling on total tool calls in the run.
@@ -50,6 +50,12 @@ class BudgetLimits:
     tokens: float | None = None
     #: Hard ceiling on estimated spend, in USD.
     usd: float | None = None
+    #: Hard ceiling on bytes returned BY tools across the run.
+    #: Bulk exfiltration is a permitted action repeated, not a forbidden one,
+    #: so only the running total gives it away. A result's size is unknowable
+    #: before the tool runs, so the breaching call completes and the NEXT one
+    #: is refused: this bounds a run at the limit plus one call.
+    bytes: float | None = None
     #: Wall-clock ceiling for the run, in seconds, measured from the first call.
     seconds: float | None = None
 
@@ -61,6 +67,8 @@ class BudgetUsage:
     calls: int = 0
     tokens: float = 0
     usd: float = 0
+    #: Bytes returned by tools so far.
+    bytes: float = 0
     #: Milliseconds since epoch of the first metered event, or None before it.
     started_at: int | None = None
 
@@ -176,7 +184,7 @@ class BudgetWarning:
     """Emitted when consumption crosses one of the plan's warn thresholds."""
 
     #: Which budget dimension crossed.
-    dimension: Literal["calls", "tokens", "usd", "seconds"]
+    dimension: Literal["calls", "tokens", "usd", "bytes", "seconds"]
     #: The threshold that fired, as a fraction of the limit.
     threshold: float
     #: Consumption and ceiling for that dimension.

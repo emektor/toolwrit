@@ -87,6 +87,16 @@ class Ledger:
         usd = (input_tokens / 1000) * price.input + (output_tokens / 1000) * price.output
         self.add_tokens(input_tokens + output_tokens, usd, at)
 
+    def add_bytes(self, size: float, at: int | None = None) -> None:
+        """
+        Record the size of a tool result.
+
+        Called after the tool has run, because the size of what comes back is
+        not knowable before it does.
+        """
+        self._start(at if at is not None else now_ms())
+        self._usage.bytes += size
+
     def add_spend(self, usd: float, at: int | None = None) -> None:
         """Record spend that is not token-denominated, e.g. a paid API call."""
         self._start(now_ms() if at is None else at)
