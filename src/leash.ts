@@ -92,6 +92,24 @@ export class Leash {
   private readonly now: () => number;
   /** "dimension:threshold" keys already reported, so each fires exactly once. */
   private readonly warned = new Set<string>();
+  /** Tail of the decision queue; see serialize(). */
+  private critical: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Run `section` with no other decision section interleaved.
+   *
+   * Chaining onto the previous tail rather than using a lock library keeps this
+   * to five lines and free of dependencies. A section that throws still
+   * releases, because the chain is advanced with a settled-either-way promise.
+   */
+  private serialize<T>(section: () => Promise<T>): Promise<T> {
+    const result = this.critical.then(section, section);
+    this.critical = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
 
   constructor(private readonly options: LeashOptions) {
     this.run = options.run ?? randomUUID();
@@ -147,23 +165,34 @@ export class Leash {
     execute: () => T | Promise<T>
   ): Promise<T> {
     const call = this.toCall(tool, args);
-    let decision = evaluate(call, {
-      policy: this.options.policy,
-      usage: this.ledger.snapshot(),
-      history: this.audit.history(),
+
+    // Deciding, recording and counting is one critical section. It used to be
+    // interruptible: an "ask" rule awaits its approval handler, and concurrent
+    // calls all evaluated against the same pre-approval snapshot, so three
+    // guards against a budget of one were all approved and all executed. The
+    // tool itself still runs outside the lock, and the common path holds it
+    // without ever awaiting, so nothing serialises unless an approval is
+    // genuinely pending -- which is the one case where serialising is right.
+    const { decision, entry } = await this.serialize(async () => {
+      let verdict = evaluate(call, {
+        policy: this.options.policy,
+        usage: this.ledger.snapshot(),
+        history: this.audit.history(),
+      });
+
+      if (verdict.effect === 'ask') {
+        verdict = await this.resolveAsk(call, verdict);
+      }
+
+      const recorded = this.audit.record(call, verdict, this.usageForAudit());
+      if (verdict.effect === 'allow') this.ledger.countCall(call.at);
+      return { decision: verdict, entry: recorded };
     });
-
-    if (decision.effect === 'ask') {
-      decision = await this.resolveAsk(call, decision);
-    }
-
-    const entry = this.audit.record(call, decision, this.usageForAudit());
 
     if (decision.effect !== 'allow') {
       throw new LeashDenied(tool, decision, entry.hash);
     }
 
-    this.ledger.countCall(call.at);
     const result = await execute();
     // The volume half of containment. Measured after the fact because a
     // result's size is not knowable before the tool produces it.
