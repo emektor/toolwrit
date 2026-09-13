@@ -29,7 +29,7 @@ from toolwrit.audit.verify import verify_file
 from toolwrit.types import Decision, ToolCall, Violation
 
 #: The read-only TypeScript reference implementation, beside this package.
-TS_ROOT = Path(os.environ.get("TOOLWRIT_TS_ROOT", Path(__file__).resolve().parents[2] / "leash"))
+TS_ROOT = Path(os.environ.get("TOOLWRIT_TS_ROOT", Path(__file__).resolve().parents[2] / "js"))
 TS_CLI = TS_ROOT / "dist" / "cli.js"
 TS_INDEX = TS_ROOT / "dist" / "index.js"
 INTEROP = Path(__file__).parent / "interop"

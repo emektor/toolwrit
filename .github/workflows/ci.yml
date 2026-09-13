@@ -1,11 +1,8 @@
 # CI for Toolwrit.
 #
-# Layout this assumes: a repository whose root holds `leash/` (TypeScript) and
-# `leash-py/` (Python) as siblings. That is how the project is extracted from
-# its parent repo, and it is deliberate -- the two implementations share a hash
-# chain, so they have to be released and tested together. When extracting, this
-# file moves to `.github/workflows/ci.yml` at the repository root; the paths
-# below are already written for that position.
+# Layout: the repository root holds `js/` (TypeScript) and `python/` (Python)
+# as siblings. That is deliberate -- the two implementations share a hash chain,
+# so they are tested and released together, never apart.
 #
 # The cross-language job is the one that matters most. Nothing but an automated
 # check keeps the two implementations from drifting: a field added to an audit
@@ -31,7 +28,7 @@ jobs:
         node: ['20', '22']
     defaults:
       run:
-        working-directory: leash
+        working-directory: js
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -49,7 +46,7 @@ jobs:
         python: ['3.10', '3.12']
     defaults:
       run:
-        working-directory: leash-py
+        working-directory: python
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -68,7 +65,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci && npm run build
-        working-directory: leash
+        working-directory: js
       - name: pack, install, and import what consumers will get
         run: |
           set -euo pipefail
@@ -90,7 +87,7 @@ jobs:
             if (typeof createMcpProxy !== 'function') throw new Error('mcp subpath export broken');
             console.log('published entry points OK');
           "
-        working-directory: leash
+        working-directory: js
 
   cross-language:
     runs-on: ubuntu-latest
@@ -103,7 +100,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: npm ci && npm run build
-        working-directory: leash
+        working-directory: js
       - run: pip install pyyaml
 
       - name: a chain written by either implementation verifies with the other
@@ -125,7 +122,7 @@ jobs:
               when: { path: { startsWith: ["/data/"] } }
           POLICY
 
-          export PYTHONPATH="$root/leash-py/src"
+          export PYTHONPATH="$root/python/src"
 
           python - <<'PY'
           from toolwrit import Toolwrit, ToolwritDenied, load_policy_file
@@ -145,7 +142,7 @@ jobs:
           PY
 
           node --input-type=module -e "
-            const { Toolwrit, ToolwritDenied, loadPolicyFile } = await import('$root/leash/dist/index.js');
+            const { Toolwrit, ToolwritDenied, loadPolicyFile } = await import('$root/js/dist/index.js');
             let t = 1789000000000; const now = () => (t += 1000);
             const toolwrit = new Toolwrit({ policy: loadPolicyFile('p.yaml'), run: 'parity', auditFile: 'ts.jsonl', now });
             for (const path of ['/data/a', '/etc/passwd', '/data/b']) {
@@ -156,7 +153,7 @@ jobs:
             console.log('typescript head:', toolwrit.head());
           "
 
-          node "$root/leash/dist/cli.js" verify py.jsonl
+          node "$root/js/dist/cli.js" verify py.jsonl
           python -m toolwrit.cli verify ts.jsonl
 
           # Equal hashes, not merely two logs that each verify on their own.

@@ -1,6 +1,6 @@
 # Toolwrit for Python
 
-The Python port lives in [`leash-py/`](../../leash-py) and is published to PyPI as **`toolwrit`**, the same name as the npm package.
+The Python port lives in [`python/`](../../python) and is published to PyPI as **`toolwrit`**, the same name as the npm package.
 
 ```bash
 pip install toolwrit
@@ -217,7 +217,7 @@ toolwrit verify  audit.jsonl --against anchors.jsonl
 **A log written by either implementation verifies with the other, and the entry hashes are equal.** Not merely "both say ok" — the same run, same clock, same calls produces the same 64-character hash for every entry, and in the common case the two files are byte-identical.
 
 ```
-$ node .../leash/dist/cli.js verify audit-py.jsonl     # TypeScript over a Python log
+$ node .../js/dist/cli.js verify audit-py.jsonl     # TypeScript over a Python log
 ok: 9 entries verified
 head: 6a5900e535789622d82e8b78374597e412d95c016fa408401697fcff01da0ea6
 
@@ -263,9 +263,9 @@ Within a violation object this port writes `path` last where the TypeScript writ
 ## Development
 
 ```bash
-cd leash-py
+cd python
 pip install -e '.[test]'
 python -m pytest
 ```
 
-The cross-language tests need `node` and a built copy of the TypeScript implementation; they look for it at `../leash` or at `$TOOLWRIT_TS_ROOT`, and skip when it is absent.
+The cross-language tests need `node` and a built copy of the TypeScript implementation; they look for it at `../js` or at `$TOOLWRIT_TS_ROOT`, and skip when it is absent.

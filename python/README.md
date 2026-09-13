@@ -3,17 +3,17 @@
 A written authority for AI agents. Allowlist the tools, cap the budget, prove
 what happened.
 
-This is a Python port of [Toolwrit](../leash). **The full documentation lives in
+This is a Python port of [Toolwrit](..). **The full documentation lives in
 the main project's docs** — the policy language, the threat model and the
 design rationale are the same here, clause for clause:
 
-- [`leash/README.md`](../leash/README.md) — the overview, run plans, the bytes
+- [`../README.md`](../README.md) — the overview, run plans, the bytes
   ceiling, receipts and anchoring.
-- [`leash/docs/policy-reference.md`](../leash/docs/policy-reference.md) — every
+- [`../js/docs/policy-reference.md`](../js/docs/policy-reference.md) — every
   policy field with a worked example.
-- [`leash/docs/threat-model.md`](../leash/docs/threat-model.md) — what is and is
+- [`../js/docs/threat-model.md`](../js/docs/threat-model.md) — what is and is
   not defended against.
-- [`leash/docs/python.md`](../leash/docs/python.md) — the Python-specific
+- [`../js/docs/python.md`](../js/docs/python.md) — the Python-specific
   reference: the full API table, the sync/async split, and everything below in
   more detail.
 
@@ -236,7 +236,7 @@ python -m pytest
 ```
 
 The cross-language tests need `node` and a built copy of the TypeScript
-implementation; they look for it at `../leash` or at `$TOOLWRIT_TS_ROOT`, and skip
+implementation; they look for it at `../js` or at `$TOOLWRIT_TS_ROOT`, and skip
 when it is absent.
 
 ## Licence

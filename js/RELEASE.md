@@ -12,8 +12,8 @@ together from one repository:
 ```
 toolwrit/                 <- repository root
 ├── .github/workflows/ci.yml
-├── leash/                  <- TypeScript package, published to npm as `toolwrit`
-└── leash-py/               <- Python package, published to PyPI as `toolwrit`
+├── js/                     <- TypeScript package, published to npm as `toolwrit`
+└── python/                 <- Python package, published to PyPI as `toolwrit`
 ```
 
 Both publish under the name `toolwrit`; both install a CLI called `toolwrit`.
@@ -24,37 +24,11 @@ need for the shorter-name-plus-different-binary split the project used before.
 publishing. It was chosen because it is not taken and does not collide with
 anything in this category, but neither registry reserves a name until you push.
 
-## Extracting from the parent repository
-
-The code currently lives inside another repository. To lift it out with its
-history:
-
-```sh
-# 1. [you] create an empty github.com/emektor/toolwrit (no README, no licence)
-
-# 2. build the standalone tree
-git clone <parent-repo> /tmp/extract && cd /tmp/extract
-git checkout claude/bi-model-capacity-middleware-7n9shg
-git filter-repo --path leash/ --path leash-py/   # or: pip install git-filter-repo
-
-# 3. the workflow moves to the root, where GitHub looks for it
-mkdir -p .github/workflows && git mv leash/.github/workflows/ci.yml .github/workflows/ci.yml
-git rm -r --cached leash/.github && rmdir -p leash/.github/workflows 2>/dev/null || true
-
-# 4. push
-git remote add origin git@github.com:emektor/toolwrit.git
-git push -u origin HEAD:main
-```
-
-If `git filter-repo` is unavailable, copying the two directories into a fresh
-repository is acceptable — the commit history is nice to keep for due diligence
-but is not load-bearing.
-
 ## Before publishing anything
 
 ```sh
-cd leash     && npm ci && npm run typecheck && npm test && npm run build
-cd ../leash-py && python -m pytest -q
+cd js       && npm ci && npm run typecheck && npm test && npm run build
+cd ../python  && python -m pytest -q
 ```
 
 Both suites must be green. CI runs these plus a cross-language job that proves
@@ -66,7 +40,7 @@ implementations have drifted and every claim about chain compatibility is void.
 
 ```sh
 # [you] npm login   (an npm account with 2FA is fine; publishing will prompt)
-cd leash
+cd js
 npm pack --dry-run          # read the file list once, on purpose
 npm publish --access public # prepublishOnly runs the tests and build first
 ```
@@ -82,7 +56,7 @@ cd "$(mktemp -d)" && npm init -y && npm install toolwrit
 
 ```sh
 # [you] a PyPI account and an API token (~/.pypirc, or TWINE_* env vars)
-cd leash-py
+cd python
 python -m build
 python -m twine check dist/*
 python -m twine upload dist/*
@@ -95,11 +69,13 @@ python -m venv /tmp/v && /tmp/v/bin/pip install toolwrit
 /tmp/v/bin/toolwrit --help
 ```
 
-## Domain
+## The landing page
 
-**[you]** `toolwrit.com` and `toolwrit.dev` have not been checked since the
-rename. Confirm availability at a registrar — DNS alone is an indication, not a
-guarantee — and register before announcing anything.
+No domain. The launch links to this repository, which is where a reader wants to
+end up anyway, and a hyphenated or half-remembered domain is worth less than
+nothing. `site/index.html` is one self-contained file — serve it from GitHub
+Pages by pointing Settings -> Pages at the branch, or drop it on any host later
+if a domain is ever worth buying.
 
 ## Versioning
 
