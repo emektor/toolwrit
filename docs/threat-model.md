@@ -99,6 +99,24 @@ Policy loading rejects unknown keys. A typo like `startWith` fails at load rathe
 
 ---
 
+### A policy pattern that freezes the gate
+
+`matches` is the one constraint that runs an algorithm over an untrusted value
+rather than comparing it. A pattern shaped `(x+)+` takes exponential time on a
+crafted input, and because evaluation is synchronous a single such argument
+stalls every decision behind it.
+
+Policies carrying that shape are rejected at load, in both implementations, by a
+structural check — not a timed one, because acceptance that depends on how fast
+a machine is would make the same policy load here and fail there. The check
+catches the classic nested-quantifier family; it is not a proof of safety for
+every pattern. A linear-time engine would be, and would cost this project its
+single runtime dependency, so it is a stated roadmap item rather than a silent
+assumption.
+
+Prefer `startsWith`, `oneOf` and `excludes` where they will do. They cannot
+backtrack at all.
+
 ## What Toolwrit does not defend against
 
 ### A compromised host process

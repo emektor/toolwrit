@@ -396,3 +396,59 @@ describe('loadPolicyFile', () => {
     assert.ok(err.message.startsWith(file));
   });
 });
+
+describe('matches: catastrophic backtracking', () => {
+  const load = (pattern: string) =>
+    parsePolicy(
+      `version: "1"\ndefault: deny\nrules:\n  - id: r\n    tools: ["t"]\n    effect: allow\n` +
+        `    when:\n      v:\n        matches: ${JSON.stringify(pattern)}\n`
+    );
+
+  it('rejects the nested-quantifier family at load time', () => {
+    // Argument values are model output, and evaluation is synchronous, so one
+    // crafted value against a pattern like this freezes the whole enforcement
+    // point. The first of these hung both implementations for over ten seconds
+    // on a 44-character input before this check existed.
+    for (const pattern of [
+      '^(([a-zA-Z0-9]+)+@)+example\\.com$',
+      '(a+)+$',
+      '(a*)*b',
+      '(\\w+\\s?)*$',
+      '((ab)+)+',
+      '(x{2,})+',
+    ]) {
+      assert.throws(() => load(pattern), /backtrack catastrophically/, pattern);
+    }
+  });
+
+  it('accepts the patterns a policy author actually writes', () => {
+    for (const pattern of [
+      '^[A-Za-z0-9._%+-]+@(support\\.)?example\\.com$', // the support example's own rule
+      '^/srv/[a-z]+/[a-z]+\\.txt$',
+      '^(abc)+$', // quantified group, nothing quantified inside it
+      '(a|b){2,5}',
+      '^(foo|bar)*$',
+      '(\\d+)\\.(\\d+)',
+    ]) {
+      assert.doesNotThrow(() => load(pattern), pattern);
+    }
+  });
+
+  it('does not mistake a quantifier inside a character class for syntax', () => {
+    assert.doesNotThrow(() => load('[+*]+'));
+  });
+
+  it('does not mistake an escaped parenthesis for a group', () => {
+    assert.doesNotThrow(() => load('\\(a+\\)+'));
+  });
+
+  it('ignores quantifiers that cannot blow up', () => {
+    // `?` and {0,1} repeat at most once, so nesting them is harmless.
+    assert.doesNotThrow(() => load('(a?)+'));
+    assert.doesNotThrow(() => load('(a{0,1})+'));
+  });
+
+  it('names the offending quantifier so the author can find it', () => {
+    assert.throws(() => load('(a+)+'), /nested quantifier: a "\+"/);
+  });
+});

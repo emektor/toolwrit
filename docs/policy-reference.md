@@ -201,6 +201,12 @@ when:
 
 ### `matches`
 
+> **`matches` runs an algorithm over model output.** A pattern with a quantifier
+> applied to a group that already contains one — `(x+)+` and its family — takes
+> exponential time on a crafted value and is rejected at load. Reach for
+> `startsWith`, `oneOf` or `excludes` first; they compare rather than search, so
+> they cannot backtrack.
+
 A JavaScript regular expression, applied to string values only.
 
 ```yaml

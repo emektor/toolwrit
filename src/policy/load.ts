@@ -206,6 +206,98 @@ function validateRule(raw: unknown, path: string): PolicyRule {
   return out;
 }
 
+/**
+ * Reject a regular expression whose shape can backtrack catastrophically.
+ *
+ * `matches` patterns are compiled once at load but RUN against argument values,
+ * which are model output — the untrusted side. A pattern with a quantifier
+ * applied to a group that already contains one, `^(([a-z]+)+@)+x$` and its
+ * family, takes exponential time on a crafted 44-character value: over ten
+ * seconds in both implementations, with the whole enforcement point frozen
+ * because evaluation is synchronous.
+ *
+ * The check is STRUCTURAL rather than timed on purpose. Rejecting a pattern
+ * because it ran slowly would make acceptance depend on the machine and the
+ * regex engine, so the same policy could load in one implementation and fail in
+ * the other — and "the same policy always reaches the same verdict" is the
+ * property this library is for. A shape test gives both languages the same
+ * answer everywhere.
+ *
+ * It is a heuristic, and the docs say so: it catches the classic nested-
+ * quantifier family, not every pathological pattern. A linear-time engine is
+ * the real fix and would cost this project its single-dependency property, so
+ * it is a deliberate item on the roadmap rather than a silent gap.
+ */
+export function nestedQuantifier(pattern: string): string | null {
+  /** Groups currently open, and whether a quantifier has been seen inside each. */
+  const stack: { quantified: boolean }[] = [];
+  let inClass = false;
+
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i]!;
+
+    if (ch === '\\') {
+      i++; // An escaped character is a literal, never syntax.
+      continue;
+    }
+    if (inClass) {
+      if (ch === ']') inClass = false;
+      continue;
+    }
+    if (ch === '[') {
+      inClass = true;
+      continue;
+    }
+    if (ch === '(') {
+      stack.push({ quantified: false });
+      continue;
+    }
+    if (ch === ')') {
+      const closed = stack.pop();
+      if (!closed) continue; // Unbalanced; the RegExp constructor will complain.
+
+      // A quantifier directly after this group, when the group itself contained
+      // one, is the catastrophic shape.
+      const next = quantifierAt(pattern, i + 1);
+      if (next !== null) {
+        if (closed.quantified) {
+          return `nested quantifier: a "${next}" applied to a group that already contains a quantifier`;
+        }
+        // The group is quantified, so the group it sits inside now counts as
+        // containing a quantifier too.
+        if (stack.length > 0) stack[stack.length - 1]!.quantified = true;
+      }
+      continue;
+    }
+    if (isQuantifier(pattern, i) && stack.length > 0) {
+      stack[stack.length - 1]!.quantified = true;
+    }
+  }
+
+  return null;
+}
+
+/** The quantifier token starting at `index`, or null if there is not one. */
+function quantifierAt(pattern: string, index: number): string | null {
+  const ch = pattern[index];
+  if (ch === '*' || ch === '+') return ch;
+  if (ch === '{') {
+    const close = pattern.indexOf('}', index);
+    if (close === -1) return null;
+    const body = pattern.slice(index + 1, close);
+    // Only an open-ended or plural repetition can blow up; {0,1} cannot.
+    if (!/^\d*,?\d*$/.test(body)) return null;
+    const [min, max] = body.split(',');
+    const upper = max === undefined ? Number(min) : max === '' ? Infinity : Number(max);
+    return upper > 1 ? `{${body}}` : null;
+  }
+  return null;
+}
+
+function isQuantifier(pattern: string, index: number): boolean {
+  return quantifierAt(pattern, index) !== null;
+}
+
 function validateConstraint(raw: unknown, path: string): ArgConstraint {
   const c = requireObject(raw, path);
   rejectUnknownKeys(c, CONSTRAINT_KEYS, path);
@@ -216,6 +308,16 @@ function validateConstraint(raw: unknown, path: string): ArgConstraint {
       new RegExp(c.matches);
     } catch (err) {
       throw new PolicyError(`"matches" is not a valid regexp (${(err as Error).message})`, path);
+    }
+    const unsafe = nestedQuantifier(c.matches);
+    if (unsafe !== null) {
+      throw new PolicyError(
+        `"matches" has a shape that can backtrack catastrophically — ${unsafe}. ` +
+          `Argument values come from the model, so a crafted value would freeze ` +
+          `enforcement. Prefer "startsWith", "oneOf" or "excludes", or rewrite the ` +
+          `pattern without the nesting`,
+        path
+      );
     }
   }
 
