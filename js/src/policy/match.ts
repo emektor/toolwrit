@@ -37,7 +37,11 @@ function globToRegExp(pattern: string): RegExp {
   }
   out += '$';
 
-  const re = new RegExp(out);
+  // The `s` flag makes `.` match a newline, so `**` really does mean "anything"
+  // -- without it a tool named "fs.a\nb" slips past `fs.**`, which matters most
+  // on a deny rule, where a pattern that fails to match is a call let through.
+  // The Python port compiles with re.DOTALL for the same reason.
+  const re = new RegExp(out, 's');
   globCache.set(pattern, re);
   return re;
 }

@@ -52,6 +52,11 @@ describe('matchesGlob', () => {
     assert.equal(matchesGlob('github/**', 'github/issues/create'), true);
     assert.equal(matchesGlob('**.read', 'a.b.c.read'), true);
     assert.equal(matchesGlob('**.read', 'a.b.c.write'), false);
+    // "Anything" includes a newline. Without the `s` flag `.` stops at one, so
+    // `fs.**` on a deny rule would not have matched this tool name -- and the
+    // Python port, which uses re.DOTALL, would have matched it.
+    assert.equal(matchesGlob('**', 'a\nb'), true);
+    assert.equal(matchesGlob('fs.**', 'fs.a\nb'), true);
   });
 
   it('keeps literal dots literal', () => {

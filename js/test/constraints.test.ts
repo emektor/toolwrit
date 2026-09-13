@@ -185,6 +185,16 @@ describe('checkArgs: matches', () => {
     assert.deepEqual(check({ matches: '' }, { x: 'anything' }), []);
   });
 
+  // Asserted on both sides: Python's "$" also matches before a final newline,
+  // so this is where the two engines would otherwise part company.
+  it('a $ anchor does not admit a trailing newline', () => {
+    assert.deepEqual(names(check({ matches: '^abc$' }, { x: 'abc\n' })), ['matches']);
+    assert.deepEqual(names(check({ matches: '^/tmp/[a-z]+$' }, { x: '/tmp/abc\n' })), ['matches']);
+    assert.deepEqual(check({ matches: '^abc$' }, { x: 'abc' }), []);
+    assert.deepEqual(check({ matches: '^a\\$$' }, { x: 'a$' }), []);
+    assert.deepEqual(check({ matches: '^a[$]c$' }, { x: 'a$c' }), []);
+  });
+
   it('reports the pattern in the message', () => {
     assert.match(check({ matches: '^ok$' }, { x: 'no' })[0]!.message, /must match \/\^ok\$\//);
   });
@@ -354,6 +364,32 @@ describe('checkArgs: urlHosts', () => {
   it('userinfo before an @ does not decide the host', () => {
     // "https://example.com@evil.com/" has hostname evil.com.
     assert.deepEqual(names(check(exact, { x: 'https://example.com@evil.com/' })), ['urlHosts']);
+  });
+
+  // The three below are the parity cases: the Python port reads hosts with
+  // urllib, which disagrees with new URL() on each of them unless it is
+  // corrected. They are asserted on both sides so neither can drift alone.
+  it('a backslash ends the authority as it does in a browser', () => {
+    assert.deepEqual(names(check(exact, { x: 'http://evil.com\\@example.com/' })), ['urlHosts']);
+    assert.deepEqual(names(check(exact, { x: 'http://evil.com\\.example.com/' })), ['urlHosts']);
+    assert.deepEqual(check(exact, { x: 'https://example.com\\path' }), []);
+    // Past the "?" or "#" a backslash is an ordinary character.
+    assert.deepEqual(check(exact, { x: 'https://example.com?q=a\\b' }), []);
+    assert.deepEqual(check(exact, { x: 'https://example.com#a\\b' }), []);
+  });
+
+  it('an IPv4 host is canonicalised before it is compared', () => {
+    const loopback = { urlHosts: ['127.0.0.1'] };
+    for (const written of ['127.0.0.1', '0x7f.1', '2130706433', '127.1', '0177.0.0.1']) {
+      assert.deepEqual(check(loopback, { x: `http://${written}/` }), [], written);
+    }
+    assert.deepEqual(names(check(loopback, { x: 'http://127.0.0.1.evil.com/' })), ['urlHosts']);
+    assert.deepEqual(names(check(loopback, { x: 'http://999.1.1.1/' })), ['urlHosts']);
+  });
+
+  it('an IPv6 host keeps its brackets', () => {
+    assert.deepEqual(check({ urlHosts: ['[::1]'] }, { x: 'http://[::1]:8080/' }), []);
+    assert.deepEqual(check({ urlHosts: ['[::ffff:1]'] }, { x: 'http://[::FFFF:1]/' }), []);
   });
 
   it('host comparison is case-insensitive in both directions', () => {

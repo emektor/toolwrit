@@ -172,6 +172,20 @@ class TestMatches:
     def test_an_empty_pattern_matches_every_string(self) -> None:
         assert check({"matches": ""}, {"x": "anything"}) == []
 
+    def test_a_dollar_anchor_does_not_admit_a_trailing_newline(self) -> None:
+        # Python's "$" also matches before a final newline and JavaScript's does
+        # not, so "^/tmp/[a-z]+$" accepted "/tmp/abc\n" here and rejected it
+        # there. The same policy has to reach the same verdict in both.
+        assert names(check({"matches": "^abc$"}, {"x": "abc\n"})) == ["matches"]
+        assert names(check({"matches": r"^/tmp/[a-z]+$"}, {"x": "/tmp/abc\n"})) == [
+            "matches"
+        ]
+        assert check({"matches": "^abc$"}, {"x": "abc"}) == []
+        # A "$" that is escaped or inside a class is a literal in both languages
+        # and must be left alone.
+        assert check({"matches": r"^a\$$"}, {"x": "a$"}) == []
+        assert check({"matches": "^a[$]c$"}, {"x": "a$c"}) == []
+
     def test_reports_the_pattern_in_the_message(self) -> None:
         assert "must match /^ok$/" in check({"matches": "^ok$"}, {"x": "no"})[0].message
 
@@ -323,6 +337,40 @@ class TestUrlHosts:
         assert names(check(self.exact, {"x": "https://example.com@evil.com/"})) == [
             "urlHosts"
         ]
+
+    def test_a_backslash_ends_the_authority_as_it_does_in_a_browser(self) -> None:
+        # WHATWG treats "\" as "/" in a special scheme, so this URL goes to
+        # evil.com. Python's urlsplit reads it as userinfo and answers
+        # "example.com" -- an allowlist checked against a host the request will
+        # never contact. Browsers, curl and new URL() all agree with the deny.
+        assert names(check(self.exact, {"x": "http://evil.com\\@example.com/"})) == [
+            "urlHosts"
+        ]
+        assert names(check(self.exact, {"x": "http://evil.com\\.example.com/"})) == [
+            "urlHosts"
+        ]
+        assert check(self.exact, {"x": "https://example.com\\path"}) == []
+        # A backslash past the "?" or "#" is an ordinary character, not a
+        # separator, and must not change which host was read.
+        assert check(self.exact, {"x": "https://example.com?q=a\\b"}) == []
+        assert check(self.exact, {"x": "https://example.com#a\\b"}) == []
+
+    def test_an_ipv4_host_is_canonicalised_before_it_is_compared(self) -> None:
+        # 0x7f.1, 2130706433 and 127.1 all reach 127.0.0.1. Comparing the
+        # literal text would let a denylist be walked straight past, and would
+        # reject a host an allowlist does in fact allow.
+        loopback = {"urlHosts": ["127.0.0.1"]}
+        for written in ("127.0.0.1", "0x7f.1", "2130706433", "127.1", "0177.0.0.1"):
+            assert check(loopback, {"x": f"http://{written}/"}) == [], written
+        # A domain that merely looks numeric is still a domain.
+        assert names(check(loopback, {"x": "http://127.0.0.1.evil.com/"})) == ["urlHosts"]
+        assert names(check(loopback, {"x": "http://999.1.1.1/"})) == ["urlHosts"]
+
+    def test_an_ipv6_host_keeps_its_brackets(self) -> None:
+        # new URL().hostname reports "[::1]", so that is the form an allowlist
+        # entry is written in; answering "::1" here would silently never match.
+        assert check({"urlHosts": ["[::1]"]}, {"x": "http://[::1]:8080/"}) == []
+        assert check({"urlHosts": ["[::ffff:1]"]}, {"x": "http://[::FFFF:1]/"}) == []
 
     def test_host_comparison_is_case_insensitive_in_both_directions(self) -> None:
         assert check(self.exact, {"x": "https://EXAMPLE.COM/"}) == []

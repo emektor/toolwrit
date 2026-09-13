@@ -50,6 +50,11 @@ class TestMatchesGlob:
         assert matches_glob("github/**", "github/issues/create") is True
         assert matches_glob("**.read", "a.b.c.read") is True
         assert matches_glob("**.read", "a.b.c.write") is False
+        # "Anything" includes a newline, asserted on both sides: TypeScript
+        # needs its `s` flag for this and Python needs re.DOTALL, and a `**`
+        # that quietly stops at a newline is a deny rule that stops matching.
+        assert matches_glob("**", "a\nb") is True
+        assert matches_glob("fs.**", "fs.a\nb") is True
 
     def test_keeps_literal_dots_literal(self) -> None:
         assert matches_glob("fs.read", "fsXread") is False

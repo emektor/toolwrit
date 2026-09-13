@@ -250,3 +250,160 @@ class TestTheHashesThemselvesMatch:
         py_last = json.loads((tmp_path / "py.jsonl").read_text(encoding="utf-8").splitlines()[2])
         ts_last = json.loads((tmp_path / "ts.jsonl").read_text(encoding="utf-8").splitlines()[2])
         assert py_last["args"] == ts_last["args"] == {"token": "[redacted]", "amount": 1234.5}
+
+
+class TestHostParsingAgreesAcrossImplementations:
+    """Every URL must yield the same host in both languages.
+
+    ``urlHosts`` is the one constraint whose verdict depends on a parser rather
+    than on a comparison, and the two languages ship different parsers:
+    JavaScript has WHATWG's ``new URL()``, Python has ``urllib``, and they
+    disagree by default on backslashes, IPv4 spellings, IPv6 brackets, empty
+    authorities and invalid ports. A policy is written once and enforced by
+    both, so a host read two ways is an allowlist that means two things.
+
+    This generates the URLs rather than listing them: the divergences that
+    matter are the ones nobody thought to write down.
+    """
+
+    @staticmethod
+    def corpus() -> list[str]:
+        schemes = ["http", "https", "ws", "ftp", "file", "custom", "HTTPS", "mailto"]
+        seps = ["//", "///", "////", "/", "", "\\\\", "//\\", "\\/"]
+        auths = [
+            "evil.com", "allowed.com@evil.com", "evil.com\\@allowed.com",
+            "user:pw@allowed.com", "allowed.com:8443", "[::1]:8080", "[::FFFF:1]",
+            "ALLOWED.COM", "allowed.com.", "allowed.com%2F@evil.com", "a\\b@c", "",
+            "xn--e1afmkfd.xn--p1ai", "127.0.0.1", "0x7f.1", "allowed.com\t@evil.com",
+            "allowed.com\n", "allowed.com:", "evil.com#allowed.com",
+        ]
+        tails = ["", "/", "/p?q=1#f", "?x=a\\b", "#a\\b", "\\?q=1", "\\#f", "/a\\b"]
+        urls = [
+            f"{s}:{sep}{a}{t}"
+            for s in schemes for sep in seps for a in auths for t in tails
+        ]
+        urls += ["not a url", "//allowed.com/", "", "://a", "http:", "https://"]
+        return list(dict.fromkeys(urls))
+
+    def test_no_url_is_read_as_two_different_hosts(self, tmp_path: Path) -> None:
+        from toolwrit.policy.constraints import _hostname_of
+
+        urls = self.corpus()
+        # Thousands of URLs do not fit in argv, so they travel by file.
+        source = tmp_path / "urls.json"
+        source.write_text(json.dumps(urls), encoding="utf-8")
+        theirs = json.loads(
+            node(
+                "--input-type=module",
+                "-e",
+                "const { readFileSync } = await import('node:fs');"
+                "const urls = JSON.parse(readFileSync(process.argv[1], 'utf8'));"
+                "console.log(JSON.stringify(urls.map(u => {"
+                "  try { return new URL(u).hostname.toLowerCase(); } catch { return null; }"
+                "})));",
+                str(source),
+            ).stdout
+        )
+        mine = [_hostname_of(u) for u in urls]
+
+        disagreements = [
+            (u, t, m) for u, t, m in zip(urls, theirs, mine) if t != m
+        ]
+        assert disagreements == [], (
+            f"{len(disagreements)} of {len(urls)} URLs parse to different hosts, "
+            f"first few: {disagreements[:5]}"
+        )
+
+
+class TestRegexAnchorsAgreeAcrossImplementations:
+    """``matches`` must reach the same verdict in both languages.
+
+    Python's ``$`` also matches just before a trailing newline; JavaScript's
+    does not. A rule written as ``^/tmp/[a-z]+$`` therefore accepted
+    ``"/tmp/abc\\n"`` on the Python side and rejected it on the TypeScript one,
+    which is a scoped-path constraint that means two different things.
+    """
+
+    PATTERNS = [
+        "^abc$", "^a[$]c$", r"^a\$$", "^(a|b)$", "^a$|^b$", "abc$", "^abc",
+        "^[a-z]+$", r"^/tmp/[a-z]+$", "^$", "a$b", r"^\d{1,3}$", "^(?:x)$",
+    ]
+    VALUES = [
+        "abc", "abc\n", "abc\n\n", "\nabc", "a$c", "a$", "", "\n", "b", "b\n",
+        "/tmp/abc", "/tmp/abc\n", "123", "123\n", "a$b", "x", "x\n",
+    ]
+
+    def test_no_pattern_and_value_pair_disagrees(self, tmp_path: Path) -> None:
+        from toolwrit.policy.constraints import _js_regex
+
+        pairs = [(p, v) for p in self.PATTERNS for v in self.VALUES]
+        source = tmp_path / "pairs.json"
+        source.write_text(json.dumps(pairs), encoding="utf-8")
+        theirs = json.loads(
+            node(
+                "--input-type=module",
+                "-e",
+                "const { readFileSync } = await import('node:fs');"
+                "const pairs = JSON.parse(readFileSync(process.argv[1], 'utf8'));"
+                "console.log(JSON.stringify(pairs.map(([p, v]) =>"
+                "  new RegExp(p).test(v))));",
+                str(source),
+            ).stdout
+        )
+        mine = [_js_regex(p).search(v) is not None for p, v in pairs]
+
+        disagreements = [
+            (p, v, t, m) for (p, v), t, m in zip(pairs, theirs, mine) if t != m
+        ]
+        assert disagreements == [], (
+            f"{len(disagreements)} of {len(pairs)} pattern/value pairs disagree, "
+            f"first few: {disagreements[:5]}"
+        )
+
+
+class TestGlobMatchingAgreesAcrossImplementations:
+    """Tool-name globs must select the same tools in both languages.
+
+    A glob decides which rule applies. On an allow rule a pattern that fails to
+    match denies a call that should have run; on a deny rule it lets one
+    through. TypeScript builds a RegExp and Python builds an ``re``, and the two
+    engines differ on what "." covers and on where "$" ends -- so the agreement
+    is generated and asserted rather than assumed.
+    """
+
+    PATTERNS = [
+        "**", "*", "fs.*", "fs.**", "**.read", "*.read", "fs.read",
+        "github/**", "a*b", "a**b", "*.*", "**/**", "", "a.b.c",
+    ]
+    NAMES = [
+        "fs.read", "fs.read.raw", "fs", "", "a\nb", "fs.a\nb", "a/b", "a.b",
+        "ab", "a.b.c", "github/issues/create", "fs.read\n", "\n", "a\tb",
+        "AB", "a.b\nc.read", "ab\n",
+    ]
+
+    def test_no_pattern_and_name_pair_disagrees(self, tmp_path: Path) -> None:
+        from toolwrit.policy.match import matches_glob
+
+        pairs = [(p, n) for p in self.PATTERNS for n in self.NAMES]
+        source = tmp_path / "globs.json"
+        source.write_text(json.dumps(pairs), encoding="utf-8")
+        theirs = json.loads(
+            node(
+                "--input-type=module",
+                "-e",
+                "const { readFileSync } = await import('node:fs');"
+                f"const {{ matchesGlob }} = await import({json.dumps(str(TS_INDEX))});"
+                "const pairs = JSON.parse(readFileSync(process.argv[1], 'utf8'));"
+                "console.log(JSON.stringify(pairs.map(([p, n]) => matchesGlob(p, n))));",
+                str(source),
+            ).stdout
+        )
+        mine = [matches_glob(p, n) for p, n in pairs]
+
+        disagreements = [
+            (p, n, t, m) for (p, n), t, m in zip(pairs, theirs, mine) if t != m
+        ]
+        assert disagreements == [], (
+            f"{len(disagreements)} of {len(pairs)} pattern/name pairs disagree, "
+            f"first few: {disagreements[:5]}"
+        )
