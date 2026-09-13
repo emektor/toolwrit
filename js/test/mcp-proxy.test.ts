@@ -803,21 +803,19 @@ describe('mcp proxy: lifecycle and exit status', () => {
       const reply = await wait;
 
       assert.match((reply.error as { message: string }).message, /downstream server exited/);
-      // KNOWN LIMITATION: the waiter is released, but the message the proxy
-      // synthesises carries no `id`, so a client with several requests in
-      // flight cannot tell which of them just died — it only learns that
-      // something did. Pinned as the actual behaviour, not fixed here.
-      assert.equal('id' in reply, false);
+      // The failure names the request it belongs to. Without the id a client
+      // with several requests in flight learns that something died but not
+      // which, and cannot fail just that one.
+      assert.equal(reply.id, 'hangs');
     });
   });
 
-  it('leaves a pending tools/call with no reply at all when the child dies', TIMEOUT, async () => {
-    // KNOWN LIMITATION, pinned rather than fixed. On exit the proxy resolves
-    // every pending waiter, but a tools/call waiter is resolved *through*
-    // `toolwrit.guard`, so its continuation runs on a microtask — after the same
-    // exit handler has already called output.end(). The reply is written to an
-    // ended stream and the client is told nothing whatsoever about that call,
-    // where a plain passthrough request at least gets the error above.
+  it('answers a pending tools/call when the child dies', TIMEOUT, async () => {
+    // The reply to a tools/call is produced after an await, so ending the
+    // transport inside the same exit handler used to close the stream first
+    // and the client was told nothing at all about that call -- worse than the
+    // passthrough case above, which at least got an error. Shutdown now waits
+    // for handlers that are mid-call.
     await withProxy({}, async (h) => {
       h.send({
         jsonrpc: '2.0',
@@ -830,9 +828,9 @@ describe('mcp proxy: lifecycle and exit status', () => {
       await h.stop();
       for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
 
-      // Nothing but the unrelated ping reply ever reached the client; the only
-      // signal about "stuck" is the transport closing underneath it.
-      assert.deepEqual(h.received.map((m) => m.id), ['ping']);
+      const stuck = h.received.find((m) => m.id === 'stuck');
+      assert.ok(stuck, `no reply for "stuck": ${JSON.stringify(h.received.map((m) => m.id))}`);
+      assert.equal((stuck.error as { code?: number } | undefined)?.code, -32000);
     });
   });
 });
@@ -892,36 +890,31 @@ describe('mcp proxy: the bytes ceiling under pipelining', () => {
     });
   });
 
-  it('KNOWN LIMITATION: a pipelined batch overruns the bytes ceiling', TIMEOUT, async () => {
-    // Reported by review and reproduced here exactly as it behaves today.
+  it('holds the bytes ceiling against a pipelined batch', TIMEOUT, async () => {
+    // The regression this pins. A client that writes several tools/call
+    // messages before reading any reply used to get them all handled in one
+    // synchronous pass, so every decision in the batch was taken against
+    // `bytes: 0` and every one was allowed: a 100-byte ceiling ran past 2,000.
     //
-    // `Toolwrit.guard` evaluates the policy synchronously and only adds the
-    // result's size to the ledger *after* the downstream call resolves. A
-    // client that writes several tools/call messages before reading any reply
-    // gets all of them handled in one synchronous pass, so every decision in
-    // the batch is taken against `bytes: 0` and every one of them is allowed.
-    // The ceiling is then overrun by the whole batch, not by one call.
-    //
-    // This is a property of the metering order, not of the proxy: the size of
-    // a result cannot be known before the tool produces it, and serialising
-    // tools/call inside the proxy would cost the concurrency MCP clients rely
-    // on. Pinned as the ACTUAL behaviour so a future fix is a deliberate,
-    // visible change rather than an accident.
+    // A result's size still cannot be known before the tool produces it, so
+    // the bound is the limit plus one call, never exactly the limit. What has
+    // changed is that the overrun no longer scales with the client's pipeline
+    // depth: where a bytes budget is declared, calls are decided one at a time.
     await withProxy({ policy: BYTES }, async (h) => {
       h.send(bigCall(1), bigCall(2), bigCall(3), bigCall(4));
       await Promise.all([1, 2, 3, 4].map((id) => h.waitFor((m) => m.id === id)));
 
       const replies = [1, 2, 3, 4].map((id) => h.received.find((m) => m.id === id)!);
-      assert.deepEqual(replies.map(isError), [false, false, false, false]);
-      // All four reached the downstream server despite a 100-byte ceiling.
-      assert.equal(toolsCalled(h.serverLog()).length, 4);
-      assert.ok(h.toolwrit.usage().bytes > 2000, 'the ceiling is overrun by the whole batch');
+      // The first is allowed, and its result exhausts the ceiling for the rest.
+      assert.equal(isError(replies[0]!), false);
+      assert.deepEqual(replies.slice(1).map(isError), [true, true, true]);
+      assert.match(resultText(replies[1]!), /data budget exhausted/);
+      // Only the first call ever reached the downstream server.
+      assert.deepEqual(toolsCalled(h.serverLog()), ['fs.read']);
 
-      // The ledger catches up once the batch settles, so the very next call is
-      // refused — the breach is bounded by the client's pipeline depth.
       const next = await h.call(bigCall(5));
       assert.equal(isError(next), true);
-      assert.equal(toolsCalled(h.serverLog()).length, 4);
+      assert.deepEqual(toolsCalled(h.serverLog()), ['fs.read']);
     });
   });
 });

@@ -7,9 +7,13 @@ every finding below was reported before any code changed, and every one was
 reproduced again before it was acted on.
 
 This is published because a security library that only advertises its successes
-is asking to be trusted on faith. Everything found is here, including the five
-things that are still open — if you are deciding whether to run this in front
-of your own tools, the open list is the part you need.
+is asking to be trusted on faith. Everything found is here, including the one
+thing that is still open — if you are deciding whether to run this in front of
+your own tools, the open list is the part you need.
+
+Four findings were published as open before they were fixed. They are kept
+below, under their own heading, rather than folded into the fixed list: what
+was wrong and for how long is part of the record.
 
 ---
 
@@ -18,12 +22,12 @@ of your own tools, the open list is the part you need.
 | | |
 |---|---|
 | Findings reproduced | 12 |
-| Fixed and covered by tests | 7 |
-| Open, one of them mitigated | 5 |
+| Fixed and covered by tests | 11 |
+| Open, and mitigated | 1 |
 | Tests before review | 343 TypeScript · 448 Python |
-| Tests after | **387 TypeScript · 464 Python** |
+| Tests after | **393 TypeScript · 473 Python** |
 
-Three of the seven fixed were failures of a guarantee the product is sold on.
+Five of the eleven fixed were failures of a guarantee the product is sold on.
 
 ---
 
@@ -118,11 +122,75 @@ Corrected in the README, the policy reference and the landing page:
 
 ---
 
-## Open — pinned as tests, not fixed
+## Fixed after the review was published
 
-Each is reproduced and covered by a test that documents the real behaviour.
+The four findings below were first published as open, each pinned by a test
+that documented the wrong behaviour. They have since been fixed, and those
+tests now assert the right one. Every fix was checked by reverting it and
+watching the test go red.
+
+### 8. Hosts, regexes and globs were read differently by the two languages — MEDIUM
+
+The product's central claim is that one policy file reaches the same verdict in
+either implementation. Three constructs broke it.
+
+```
+http://evil.com\@allowed.com/   TypeScript: DENY (host evil.com)
+                                Python:     ALLOW (host allowed.com)
+```
+
+A backslash ends the authority in every browser, in curl and in `new URL()`;
+Python's `urllib` read it as userinfo, so the allowlist was checked against a
+host the request would never contact. Python also compared IPv4 literally, so
+`http://0x7f.1` did not match an entry for `127.0.0.1` although that is exactly
+where it goes, and reported IPv6 without the brackets `new URL()` uses.
+
+Python's `$` also matches before a trailing newline, so `^/tmp/[a-z]+$`
+accepted `"/tmp/abc\n"` there and rejected it here. And in TypeScript `.` does
+not cross a newline without the `s` flag, so `fs.**` did not match a tool named
+`"fs.a\nb"` — on a deny rule, a pattern that fails to match is a call let
+through, which is the one place TypeScript was the unsafe side.
+
+All three are closed and each is pinned by a *generated* differential test
+rather than the single example the review happened to find: 9,700 URLs, every
+pattern/value pair, every glob/name pair, run through both implementations and
+required to agree. They do.
+
+### 9. `Date` and other `toJSON` arguments failed their own verify — MEDIUM
+
+The canonicaliser read objects structurally (`Date` → `{}`) while the JSONL line
+was written with `JSON.stringify`, which honours `toJSON`. An entirely honest
+run therefore came back from its own file as `bad-hash`. In a product whose
+claim is that a bad hash means tampering, a false alarm is the same bug pointed
+the other way. `canonicalize` now calls `toJSON`, which also covers Decimal.js,
+Luxon, BigNumber and Mongo ObjectId. Python needs no equivalent: it refuses a
+datetime outright, which is loud rather than wrong.
+
+### 10. A pipelined client could overrun the bytes ceiling — MEDIUM
+
+Four `tools/call` messages written in one batch were all decided against
+`bytes: 0`, and a 100-byte ceiling ran past 2,000 — the overrun scaled with the
+client's pipeline depth. A result's size still cannot be known before the tool
+runs, so the bound is the limit plus one call and never exactly the limit; what
+has changed is that where a bytes budget is declared, calls are decided one at
+a time. A policy without one keeps full concurrency, so the cost falls only on
+the feature that needs it. Both languages, both pinned.
+
+### 11. Two proxy defects on downstream exit — LOW
+
+The synthesised error carried no `id`, so a client with several requests in
+flight learned that something had died but not which. Worse, a pending
+`tools/call` got no reply at all: its answer is produced after an `await`, and
+the transport was closed in the same handler that released it, so the reply was
+written into a closed pipe. Failures now name their request, and shutdown waits
+for handlers that are mid-call.
+
+---
+
+## Still open
 
 ### A. ReDoS through an attacker-supplied argument value — HIGH, mitigated
+
 
 `matches` patterns are compiled at load but run against untrusted argument
 strings. A plausible author-written pattern with nested quantifiers hung both
@@ -150,49 +218,6 @@ The real fix is a linear-time engine, which would cost the single-dependency
 property — a trade worth a decision rather than a reflex, so it is on the
 roadmap rather than made quietly. The docs steer authors to `startsWith`,
 `oneOf` and `excludes`, which cannot backtrack at all.
-
-### B. `Date` and other `toJSON` arguments fail their own verify — MEDIUM
-
-The canonicaliser treats objects structurally (`Date` → `{}`) while the JSONL
-line is written with `JSON.stringify`, which honours `toJSON`. On reload the two
-disagree and an entirely honest run reports `bad-hash` — a false tamper alarm,
-which in a trust product is its own kind of damage. Affects arguments carrying
-`Date`, Decimal.js, Luxon, BigNumber or Mongo ObjectId. Plain JSON arguments,
-which is what an MCP server delivers, are unaffected.
-
-### C. Parser divergences between the implementations — MEDIUM
-
-The cross-language chain is real, but a few verdicts differ:
-
-```
-http://evil.com\@allowed.com/   TypeScript: DENY (host evil.com)
-                                Python:     ALLOW (host allowed.com)
-```
-
-Browsers and curl agree with TypeScript; Python's `urllib` reads the backslash
-literally. A known SSRF-allowlist trick, and the Python port is on the unsafe
-side of it. Also: `$` in Python matches before a trailing newline and in
-JavaScript does not, and the TypeScript glob `**` fails to match a tool name
-containing a newline. `urlHosts` is documented as defence-in-depth rather than
-a primary control, which caps the severity but does not excuse it.
-
-### D. A pipelined client can overrun the bytes ceiling — MEDIUM
-
-A result's size is unknowable before the tool runs, so with four `tools/call`
-messages written in a single batch, all four are decided against `bytes: 0`.
-Measured: a 100-byte ceiling overrun to more than 2,000. Bounded by the
-client's pipeline depth, not unbounded, and the paired test shows the ceiling
-holding correctly for a client that waits for each reply. The `calls` budget is
-unaffected.
-
-### E. Two smaller proxy defects
-
-On downstream exit, the error reply carries no `id`, so a client with several
-requests in flight learns something died but not which; and a pending
-`tools/call` receives no reply at all, because its continuation runs after the
-output stream was ended.
-
----
 
 ## What was attacked and held
 
@@ -231,11 +256,19 @@ reader, and a ledger that trusted its caller. That is a recognisable shape —
 the interesting part was reviewed hardest and the plumbing was not — and it is
 worth knowing that the three most serious findings were all in the plumbing.
 
-Five findings remain open, and the ReDoS one is mitigated at the policy
-boundary. None is a design flaw; each is bounded, reproducible and documented
-in place. Fixing ReDoS *properly* is the only one that would change an
-architectural decision, because a linear-time engine costs the
-single-dependency property.
+One finding remains open, and it is mitigated at the policy boundary: a policy
+carrying the dangerous shape is refused at load in both implementations. It is
+the only one of the twelve that cannot be closed without changing an
+architectural decision, because the real fix is a linear-time regex engine and
+that costs the single-dependency property. A trade worth a decision rather than
+a reflex, so it is on the roadmap and stated here rather than made quietly.
+
+The other four that were published as open have since been fixed. Worth saying
+plainly: three of them were found only because the cross-language claim was
+retested by generating inputs rather than by listing them. The review found one
+backslash URL; the generated corpus found IPv4 spellings, IPv6 brackets, empty
+authorities and invalid ports behind it. A single example is a bug report; the
+class behind it is the finding.
 
 An earlier fail-open, found by the project's own test suite during development
 rather than by these reviewers, is described in the README and visible in the

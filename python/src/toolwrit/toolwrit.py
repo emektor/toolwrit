@@ -205,6 +205,19 @@ class Toolwrit:
 
             self._enforce(tool, call, decision)
 
+            # A bytes ceiling is the one budget whose consumption is unknowable
+            # until after the tool has run, so concurrent calls would each be
+            # decided against a total none of them had contributed to yet. Where
+            # a ceiling is declared the tool runs inside the critical section
+            # too, bounding a run at the limit plus one call -- the bound the
+            # documentation promises. A policy with no bytes budget keeps full
+            # concurrency, so the cost falls only on the feature that needs it.
+            if self._policy.budget is not None and self._policy.budget.bytes is not None:
+                inside = execute()
+                if inspect.isawaitable(inside):
+                    inside = await inside
+                return self._measure(call, inside)  # type: ignore[arg-type]
+
         result = execute()
         if inspect.isawaitable(result):
             result = await result

@@ -113,7 +113,25 @@ export function createMcpProxy(options: McpProxyOptions): McpProxy {
    * decides what happens to that response — forwarded verbatim, filtered, or
    * handed back to the `guard` continuation waiting on it.
    */
-  const pending = new Map<string, (message: JsonRpcMessage) => void>();
+  const pending = new Map<
+    string,
+    { id: JsonRpcMessage['id']; deliver: (message: JsonRpcMessage) => void }
+  >();
+
+  /**
+   * `tools/call` handlers that have not finished yet.
+   *
+   * Their replies are produced after an `await`, so ending the transport the
+   * instant the child dies would close the stream before those continuations
+   * run, and a client with a call in flight would be left waiting forever on a
+   * reply that was written into a closed pipe. Shutdown waits for these first.
+   */
+  const inFlight = new Set<Promise<unknown>>();
+
+  function track(work: Promise<unknown>): void {
+    inFlight.add(work);
+    void work.finally(() => inFlight.delete(work));
+  }
 
   function send(stream: NodeJS.WritableStream, message: JsonRpcMessage): void {
     stream.write(`${JSON.stringify(message)}\n`);
@@ -137,7 +155,7 @@ export function createMcpProxy(options: McpProxyOptions): McpProxy {
         resolve({ jsonrpc: '2.0' });
         return;
       }
-      pending.set(key, resolve);
+      pending.set(key, { id: request.id, deliver: resolve });
       toChild(request);
     });
   }
@@ -202,7 +220,7 @@ export function createMcpProxy(options: McpProxyOptions): McpProxy {
     // Every tools/call is enforced, with or without an id. Requiring an id here
     // would make omitting one a complete policy bypass.
     if (message.method === 'tools/call') {
-      void handleToolsCall(message);
+      track(handleToolsCall(message));
       return;
     }
 
@@ -211,8 +229,11 @@ export function createMcpProxy(options: McpProxyOptions): McpProxy {
       // Register interest in the response so tools/list can be filtered on the
       // way back; everything else is handed through untouched.
       const filter = message.method === 'tools/list';
-      pending.set(key, (response) => {
-        toClient(filter ? filterToolsListResponse(response) : response);
+      pending.set(key, {
+        id: message.id,
+        deliver: (response) => {
+          toClient(filter ? filterToolsListResponse(response) : response);
+        },
       });
     }
     toChild(message);
@@ -224,7 +245,7 @@ export function createMcpProxy(options: McpProxyOptions): McpProxy {
       const waiting = pending.get(key);
       if (waiting) {
         pending.delete(key);
-        waiting(message);
+        waiting.deliver(message);
         return;
       }
     }
@@ -297,13 +318,19 @@ export function createMcpProxy(options: McpProxyOptions): McpProxy {
         child = null;
         if (!stopped) warn(`downstream server exited (code ${code ?? 'null'}, signal ${signal ?? 'null'})`);
         // Nothing can answer the client any more, so end the transport rather
-        // than leaving it waiting on responses that will never arrive.
-        for (const resolve of pending.values()) {
-          resolve({ jsonrpc: '2.0', error: { code: -32000, message: 'downstream server exited' } });
+        // than leaving it waiting on responses that will never arrive. Each
+        // failure carries the id it belongs to: a client with several requests
+        // in flight otherwise learns that something died but not which.
+        for (const { id, deliver } of pending.values()) {
+          deliver({
+            jsonrpc: '2.0',
+            id: id ?? null,
+            error: { code: -32000, message: 'downstream server exited' },
+          });
         }
         pending.clear();
         settleExit(signal ? 128 + (SIGNAL_NUMBERS[signal] ?? 0) : code ?? 0);
-        endOutput();
+        void endOutputWhenQuiet();
       });
 
       await new Promise<void>((resolve) => {
@@ -339,6 +366,19 @@ export function createMcpProxy(options: McpProxyOptions): McpProxy {
    * Propagate the downstream server's death to the client by closing the
    * transport, and let go of stdin so a host process can actually exit.
    */
+  /**
+   * Close the transport, but not before the handlers that were mid-call have
+   * written their replies. Each one was just resolved with a downstream-exited
+   * error, so this settles in a turn or two; the loop repeats because settling
+   * one handler can leave another still running.
+   */
+  async function endOutputWhenQuiet(): Promise<void> {
+    while (inFlight.size > 0) {
+      await Promise.allSettled([...inFlight]);
+    }
+    endOutput();
+  }
+
   function endOutput(): void {
     if (ended) return;
     ended = true;

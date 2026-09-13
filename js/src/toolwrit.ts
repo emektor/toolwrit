@@ -166,14 +166,40 @@ export class Toolwrit {
   ): Promise<T> {
     const call = this.toCall(tool, args);
 
-    // Deciding, recording and counting is one critical section. It used to be
-    // interruptible: an "ask" rule awaits its approval handler, and concurrent
-    // calls all evaluated against the same pre-approval snapshot, so three
-    // guards against a budget of one were all approved and all executed. The
-    // tool itself still runs outside the lock, and the common path holds it
-    // without ever awaiting, so nothing serialises unless an approval is
-    // genuinely pending -- which is the one case where serialising is right.
-    const { decision, entry } = await this.serialize(async () => {
+    // A bytes ceiling is the one budget whose consumption is unknowable until
+    // after the tool has run, so concurrent calls are each decided against a
+    // total none of them has contributed to yet: four calls written in one
+    // pipelined batch all saw `bytes: 0`, and a 100-byte ceiling ran past
+    // 2,000. Where a ceiling is declared, the tool runs inside the critical
+    // section too, which bounds a run at the limit plus one call -- the bound
+    // the documentation promises. A policy with no bytes budget keeps full
+    // concurrency, so the cost falls only on the feature that needs it.
+    if (this.options.policy.budget?.bytes !== undefined) {
+      // Already inside the section, so decideAndRun must not take it again:
+      // serialize() chains onto the tail it is itself holding, and a nested
+      // call would wait on its own completion forever.
+      return this.serialize(() => this.decideAndRun(call, execute, true));
+    }
+    return this.decideAndRun(call, execute, false);
+  }
+
+  /**
+   * One call, from verdict to accounting.
+   *
+   * Deciding, recording and counting is itself one critical section. It used to
+   * be interruptible: an "ask" rule awaits its approval handler, and concurrent
+   * calls all evaluated against the same pre-approval snapshot, so three guards
+   * against a budget of one were all approved and all executed. The tool itself
+   * runs outside that inner section, and the common path holds it without ever
+   * awaiting, so nothing serialises unless an approval is genuinely pending --
+   * the one case where serialising is right.
+   */
+  private async decideAndRun<T>(
+    call: ToolCall,
+    execute: () => T | Promise<T>,
+    held: boolean
+  ): Promise<T> {
+    const decide = async (): Promise<{ decision: Decision; entry: AuditEntry }> => {
       let verdict = evaluate(call, {
         policy: this.options.policy,
         usage: this.ledger.snapshot(),
@@ -187,10 +213,12 @@ export class Toolwrit {
       const recorded = this.audit.record(call, verdict, this.usageForAudit());
       if (verdict.effect === 'allow') this.ledger.countCall(call.at);
       return { decision: verdict, entry: recorded };
-    });
+    };
+
+    const { decision, entry } = held ? await decide() : await this.serialize(decide);
 
     if (decision.effect !== 'allow') {
-      throw new ToolwritDenied(tool, decision, entry.hash);
+      throw new ToolwritDenied(call.tool, decision, entry.hash);
     }
 
     const result = await execute();

@@ -115,7 +115,8 @@ compromised. The audit log is tamper-*evident*, not tamper-proof: anchor the
 head hash somewhere the agent cannot reach, or it proves nothing.
 
 The full list, including the findings from two independent security reviews and
-the four that are still open, is in the repository.
+the one that is still open, is in
+[`SECURITY-REVIEW.md`](https://github.com/emektor/toolwrit/blob/main/SECURITY-REVIEW.md).
 
 ## Licence
 

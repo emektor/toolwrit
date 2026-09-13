@@ -439,3 +439,73 @@ class TestAuditChainOverAWholeRun:
             return toolwrit.head()
 
         assert build() == build(), "the chain is a function of the inputs alone"
+
+
+class TestTheBytesCeilingUnderConcurrency:
+    """Concurrent calls must not each be decided against a stale byte total.
+
+    A result's size is unknowable until the tool has produced it, so a bytes
+    ceiling always allows the limit plus one call. What it must not do is allow
+    the limit plus *however many calls the caller happened to launch at once*:
+    without serialisation every one of them evaluates against the same zero and
+    every one is permitted.
+    """
+
+    @staticmethod
+    def policy_with_ceiling() -> Policy:
+        return policy(
+            default="allow",
+            budget=BudgetLimits(bytes=100),
+        )
+
+    def test_concurrent_calls_are_decided_one_at_a_time(self) -> None:
+        toolwrit = Toolwrit(self.policy_with_ceiling(), now=frozen_clock())
+        ran: list[int] = []
+
+        async def big(index: int) -> str:
+            await asyncio.sleep(0)
+            ran.append(index)
+            return "x" * 500
+
+        async def main() -> list[Any]:
+            return await asyncio.gather(
+                *(
+                    toolwrit.guard_async("fs.read", {"i": i}, lambda i=i: big(i))
+                    for i in range(4)
+                ),
+                return_exceptions=True,
+            )
+
+        results = asyncio.run(main())
+
+        # The first call is allowed and its result exhausts the ceiling; the
+        # other three are refused before their tool is ever invoked.
+        assert len(ran) == 1, f"{len(ran)} tools ran, expected 1"
+        assert sum(isinstance(r, ToolwritDenied) for r in results) == 3
+        assert toolwrit.usage().calls == 1
+
+    def test_a_policy_without_a_bytes_budget_still_runs_calls_concurrently(self) -> None:
+        # The serialisation is the price of a bytes ceiling, not a new default.
+        toolwrit = Toolwrit(policy(default="allow"), now=frozen_clock())
+        order: list[str] = []
+
+        async def slow() -> str:
+            order.append("slow-start")
+            await asyncio.sleep(0.02)
+            order.append("slow-end")
+            return "s"
+
+        async def quick() -> str:
+            await asyncio.sleep(0)
+            order.append("quick")
+            return "q"
+
+        async def main() -> None:
+            await asyncio.gather(
+                toolwrit.guard_async("fs.read", {}, slow),
+                toolwrit.guard_async("fs.read", {}, quick),
+            )
+
+        asyncio.run(main())
+        # The quick call finished while the slow one was still in its tool.
+        assert order == ["slow-start", "quick", "slow-end"], order

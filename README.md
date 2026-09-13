@@ -755,7 +755,7 @@ The wedge is narrow and deliberate: Toolwrit does one layer, deterministically, 
 - [`js/docs/policy-reference.md`](js/docs/policy-reference.md) — exhaustive constraint reference, the `plan` block, and common policies.
 - [`js/docs/threat-model.md`](js/docs/threat-model.md) — what Toolwrit defends against, what it does not, and how to anchor the audit chain.
 - [`js/docs/python.md`](js/docs/python.md) — the Python package (`toolwrit`, imports as `toolwrit`), its API, and the chain-compatibility guarantee.
-- [`SECURITY-REVIEW.md`](SECURITY-REVIEW.md) — two independent reviews, every finding they produced, and the five that are still open.
+- [`SECURITY-REVIEW.md`](SECURITY-REVIEW.md) — two independent reviews, every finding they produced, the four that were published as open before being fixed, and the one that is still open.
 
 ## Licence
 
