@@ -3,17 +3,18 @@
 A written authority for AI agents. Allowlist the tools, cap the budget, prove
 what happened.
 
-This is a Python port of [Toolwrit](..). **The full documentation lives in
-the main project's docs** — the policy language, the threat model and the
+This is the Python port of
+[Toolwrit](https://github.com/emektor/toolwrit). **The full documentation lives
+in the main project's docs** — the policy language, the threat model and the
 design rationale are the same here, clause for clause:
 
-- [`../README.md`](../README.md) — the overview, run plans, the bytes
-  ceiling, receipts and anchoring.
-- [`../js/docs/policy-reference.md`](../js/docs/policy-reference.md) — every
+- [the overview](https://github.com/emektor/toolwrit#readme) — run plans, the
+  bytes ceiling, receipts and anchoring.
+- [`policy-reference.md`](https://github.com/emektor/toolwrit/blob/main/js/docs/policy-reference.md) — every
   policy field with a worked example.
-- [`../js/docs/threat-model.md`](../js/docs/threat-model.md) — what is and is
+- [`threat-model.md`](https://github.com/emektor/toolwrit/blob/main/js/docs/threat-model.md) — what is and is
   not defended against.
-- [`../js/docs/python.md`](../js/docs/python.md) — the Python-specific
+- [`python.md`](https://github.com/emektor/toolwrit/blob/main/js/docs/python.md) — the Python-specific
   reference: the full API table, the sync/async split, and everything below in
   more detail.
 

@@ -7,7 +7,7 @@ every finding below was reported before any code changed, and every one was
 reproduced again before it was acted on.
 
 This is published because a security library that only advertises its successes
-is asking to be trusted on faith. Everything found is here, including the four
+is asking to be trusted on faith. Everything found is here, including the five
 things that are still open — if you are deciding whether to run this in front
 of your own tools, the open list is the part you need.
 
@@ -17,9 +17,9 @@ of your own tools, the open list is the part you need.
 
 | | |
 |---|---|
-| Findings reproduced | 11 |
-| Fixed and covered by tests | 8 |
-| Open, one of them mitigated | 3 |
+| Findings reproduced | 12 |
+| Fixed and covered by tests | 7 |
+| Open, one of them mitigated | 5 |
 | Tests before review | 343 TypeScript · 448 Python |
 | Tests after | **387 TypeScript · 464 Python** |
 
@@ -231,9 +231,11 @@ reader, and a ledger that trusted its caller. That is a recognisable shape —
 the interesting part was reviewed hardest and the plumbing was not — and it is
 worth knowing that the three most serious findings were all in the plumbing.
 
-Three findings remain open, and the ReDoS one is mitigated at the policy boundary. None is a design flaw; each is bounded, reproducible
-and documented in place. Fixing ReDoS *properly* is the only one that would change an architectural
-decision, because a linear-time engine costs the single-dependency property.
+Five findings remain open, and the ReDoS one is mitigated at the policy
+boundary. None is a design flaw; each is bounded, reproducible and documented
+in place. Fixing ReDoS *properly* is the only one that would change an
+architectural decision, because a linear-time engine costs the
+single-dependency property.
 
 An earlier fail-open, found by the project's own test suite during development
 rather than by these reviewers, is described in the README and visible in the

@@ -16,7 +16,9 @@ repository: https://github.com/emektor/toolwrit**
 npm install toolwrit
 ```
 
-The package installs a binary of the same name, `toolwrit`. A Python port with the same policy language and a compatible audit chain uses the same name on PyPI — see [`docs/python.md`](docs/python.md).
+The package installs a binary of the same name, `toolwrit`. The Python port is
+`pip install toolwrit` — same policy language, same chain; see
+[`docs/python.md`](https://github.com/emektor/toolwrit/blob/main/js/docs/python.md).
 
 **`toolwrit.yaml`**
 
