@@ -15,6 +15,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:   # so a run can be re-triggered without an empty commit
 
 defaults:
   run:
