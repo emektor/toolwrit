@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "toolwrit"
+version = "0.1.0"
+description = "A written authority for AI agents. Allowlist the tools, cap the budget, prove what happened."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+keywords = [
+    "ai", "agent", "guardrails", "mcp", "tool-calling",
+    "policy", "audit", "llm", "security",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+dependencies = ["pyyaml>=6"]
+
+[project.urls]
+Homepage = "https://github.com/emektor/toolwrit"
+Repository = "https://github.com/emektor/toolwrit"
+Issues = "https://github.com/emektor/toolwrit/issues"
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+toolwrit = "toolwrit.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
