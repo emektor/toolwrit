@@ -51,6 +51,21 @@ describe('canonicalize', () => {
     assert.equal(canonicalize({ b: 1, a: 2 }), '{"a":2,"b":1}');
   });
 
+  it('honours toJSON, because the file is written with JSON.stringify', () => {
+    // Hashing a Date structurally gives {}, while the JSONL line holds the ISO
+    // string -- so an entirely honest entry fails to verify against its own
+    // file. The canonical form has to be what JSON.stringify will write.
+    const when = new Date('2026-09-13T08:00:00Z');
+    assert.equal(canonicalize(when), JSON.stringify(when));
+    assert.equal(canonicalize({ when }), '{"when":"2026-09-13T08:00:00.000Z"}');
+    assert.equal(canonicalize([when]), '["2026-09-13T08:00:00.000Z"]');
+    // Any library object carrying a toJSON, not only Date.
+    const decimal = { value: '1.10', toJSON(): string { return this.value; } };
+    assert.equal(canonicalize({ amount: decimal }), '{"amount":"1.10"}');
+    // A "toJSON" that is not callable is an ordinary field.
+    assert.equal(canonicalize({ toJSON: 1 }), '{"toJSON":1}');
+  });
+
   it('sorts keys recursively, at every depth', () => {
     assert.equal(
       canonicalize({ z: { d: 1, c: { b: 1, a: 2 } }, y: 3 }),
@@ -336,6 +351,20 @@ describe('verifyFile', () => {
     const r = verifyFile(file);
     assert.equal(r.ok, true);
     assert.equal(r.count, 2);
+    assert.equal(r.head, log.head());
+  });
+
+  it('verifies a log whose arguments carried a Date', () => {
+    // The regression this pins: a run that did nothing wrong reported
+    // "bad-hash" against its own file, because the Date was hashed as {} and
+    // written as a string. A false tamper alarm is not a lesser bug here.
+    const file = join(tmp.path, 'dated.jsonl');
+    const log = new AuditLog({ run: 'dated', file });
+    const args = { when: new Date('2026-09-13T08:00:00Z'), nested: [new Date(0)] };
+    log.record(call('api.schedule', args, T0), ALLOW, { calls: 0, tokens: 0, usd: 0, bytes: 0 });
+
+    const r = verifyFile(file);
+    assert.equal(r.ok, true, JSON.stringify(r));
     assert.equal(r.head, log.head());
   });
 

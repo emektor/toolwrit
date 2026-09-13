@@ -46,6 +46,18 @@ export interface AuditEntry {
  */
 export function canonicalize(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+
+  // The entry is hashed here and written to the file with JSON.stringify, so
+  // the two have to agree on every value. JSON.stringify calls toJSON; reading
+  // an object structurally instead would hash a Date as {} while writing it as
+  // a string, and the entry would come back from its own file as "bad-hash" --
+  // a tamper alarm on an honest run, which in a trust product is its own kind
+  // of damage. Affects Date, Decimal.js, Luxon, BigNumber and Mongo ObjectId.
+  const toJSON = (value as { toJSON?: unknown }).toJSON;
+  if (typeof toJSON === 'function') {
+    return canonicalize((toJSON as (key?: string) => unknown).call(value, ''));
+  }
+
   if (Array.isArray(value)) return `[${value.map(canonicalize).join(',')}]`;
 
   const entries = Object.entries(value as Record<string, unknown>)
