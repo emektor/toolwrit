@@ -52,7 +52,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: pip install pytest pyyaml
+      # Install the package rather than leaning on the working directory:
+      # the sources live in `src/`, so a bare `pytest` here cannot import
+      # `toolwrit` at all. Installing it also means the suite exercises the
+      # same import path a user gets from `pip install toolwrit`.
+      - run: pip install -e ".[test]"
       - run: python -m pytest -q
 
   # A package that installs but cannot be imported is a broken release, and the
