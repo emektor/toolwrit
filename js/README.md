@@ -16,6 +16,10 @@ repository: https://github.com/emektor/toolwrit**
 npm install toolwrit
 ```
 
+Until the first release is published, install from the repository instead —
+`git clone https://github.com/emektor/toolwrit && npm install ./toolwrit/js`,
+which builds on install.
+
 The package installs a binary of the same name, `toolwrit`. The Python port is
 `pip install toolwrit` — same policy language, same chain; see
 [`docs/python.md`](https://github.com/emektor/toolwrit/blob/main/js/docs/python.md).

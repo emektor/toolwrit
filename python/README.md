@@ -24,6 +24,9 @@ What follows is only what a Python user needs on top of that.
 pip install toolwrit
 ```
 
+Until the first release is published:
+`pip install "git+https://github.com/emektor/toolwrit.git#subdirectory=python"`
+
 ```python
 from toolwrit import Toolwrit, ToolwritDenied, load_policy_file
 
