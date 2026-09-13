@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 from helpers import T0
-from leash.budget.ledger import Ledger, TokenPrice
+from toolwrit.budget.ledger import Ledger, TokenPrice
 
 
 class TestLedger:
@@ -76,14 +76,14 @@ class TestPriceCoercion:
     """
 
     def test_accepts_a_plain_mapping(self):
-        from leash.budget.ledger import Ledger
+        from toolwrit.budget.ledger import Ledger
 
         ledger = Ledger()
         ledger.add_usage(1000, 500, {"input": 0.003, "output": 0.015}, at=0)
         assert ledger.snapshot().usd == pytest.approx(0.003 + 0.0075)
 
     def test_mapping_and_dataclass_agree(self):
-        from leash.budget.ledger import Ledger, TokenPrice
+        from toolwrit.budget.ledger import Ledger, TokenPrice
 
         a, b = Ledger(), Ledger()
         a.add_usage(1234, 567, {"input": 0.01, "output": 0.02}, at=0)
@@ -91,14 +91,14 @@ class TestPriceCoercion:
         assert a.snapshot().usd == b.snapshot().usd
 
     def test_a_partial_mapping_defaults_the_missing_side_to_zero(self):
-        from leash.budget.ledger import Ledger
+        from toolwrit.budget.ledger import Ledger
 
         ledger = Ledger()
         ledger.add_usage(1000, 1000, {"input": 0.005}, at=0)
         assert ledger.snapshot().usd == pytest.approx(0.005)
 
     def test_rejects_a_misspelled_key_rather_than_pricing_it_at_zero(self):
-        from leash.budget.ledger import Ledger
+        from toolwrit.budget.ledger import Ledger
 
         # Silently pricing a typo at zero would under-report spend, which is
         # the direction that lets a budget ceiling never fire.
@@ -106,7 +106,7 @@ class TestPriceCoercion:
             Ledger().add_usage(1000, 0, {"imput": 0.003}, at=0)
 
     def test_rejects_a_wholly_wrong_type(self):
-        from leash.budget.ledger import Ledger
+        from toolwrit.budget.ledger import Ledger
 
         with pytest.raises(TypeError, match="must be a TokenPrice or a mapping"):
             Ledger().add_usage(1000, 0, 0.003, at=0)  # type: ignore[arg-type]

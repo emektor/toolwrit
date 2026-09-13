@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from leash.policy.match import MISSING, matches_any_glob, matches_glob, resolve_path
+from toolwrit.policy.match import MISSING, matches_any_glob, matches_glob, resolve_path
 
 
 class TestMatchesGlob:

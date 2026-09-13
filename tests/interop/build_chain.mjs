@@ -1,5 +1,5 @@
 /**
- * Build a Leash audit chain with the reference TypeScript implementation.
+ * Build a Toolwrit audit chain with the reference TypeScript implementation.
  *
  * Reads a JSON spec on argv[2] ({ run, redact, file, entries: [...] }) and
  * writes the chain to `file`, printing the head hash and each entry hash as

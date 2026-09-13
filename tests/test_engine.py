@@ -16,8 +16,8 @@ from dataclasses import replace
 from typing import Any
 
 from helpers import at, call, ctx, hist, plain, policy, rule, shape, usage
-from leash.policy.engine import evaluate
-from leash.types import ArgConstraint, BudgetLimits, EvalContext, RateLimit
+from toolwrit.policy.engine import evaluate
+from toolwrit.types import ArgConstraint, BudgetLimits, EvalContext, RateLimit
 
 
 class TestMatchingAndDefaults:

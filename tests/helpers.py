@@ -1,5 +1,5 @@
 """
-Shared fixtures for the Leash test suite.
+Shared fixtures for the Toolwrit test suite.
 
 Everything here is deterministic on purpose: no wall clock, no timers, no
 randomness. Every timestamp is an explicit number so a failing assertion can
@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Sequence
 
-from leash._js import to_jsonable
-from leash.types import (
+from toolwrit._js import to_jsonable
+from toolwrit.types import (
     BudgetUsage,
     Decision,
     EvalContext,

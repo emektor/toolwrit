@@ -17,8 +17,8 @@ from typing import Any
 import pytest
 
 from helpers import names
-from leash.policy.constraints import check_args
-from leash.types import ArgConstraint, Violation
+from toolwrit.policy.constraints import check_args
+from toolwrit.types import ArgConstraint, Violation
 
 
 def check(c: dict[str, Any], args: dict[str, Any], path: str = "x") -> list[Violation]:

@@ -1,5 +1,5 @@
 """
-Core contracts for Leash.
+Core contracts for Toolwrit.
 
 Everything in this file is data. The policy engine is a pure function over
 these shapes: no network, no model calls, no randomness. That is the whole
@@ -38,7 +38,7 @@ class ToolCall:
 
 @dataclass
 class BudgetLimits:
-    """What a run is allowed to consume before Leash cuts it off."""
+    """What a run is allowed to consume before Toolwrit cuts it off."""
 
     JSON_OMIT_IF_NONE: ClassVar[frozenset[str]] = frozenset(
         {"calls", "tokens", "usd", "bytes", "seconds"}
@@ -172,7 +172,7 @@ class RunPlan:
 
     #: What this run is for, in the operator's words. Carried into the audit log.
     purpose: str
-    #: Who approved the envelope. Recorded, never verified by Leash itself.
+    #: Who approved the envelope. Recorded, never verified by Toolwrit itself.
     approvedBy: str | None = None
     #: Fractions of the budget (0-1) at which the run reports to a human.
     #: Each threshold fires at most once. Defaults to [0.8, 0.95].
@@ -207,7 +207,7 @@ class Policy:
     rules: list[PolicyRule] = field(default_factory=list)
     #: Free-text label carried into audit exports.
     name: str | None = None
-    #: Effect when no rule matches. Defaults to "deny" -- Leash is deny-by-default.
+    #: Effect when no rule matches. Defaults to "deny" -- Toolwrit is deny-by-default.
     default: Effect | None = None
     budget: BudgetLimits | None = None
     #: The declared, pre-approved envelope for a run. See RunPlan.

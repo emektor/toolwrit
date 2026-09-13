@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from helpers import plain
-from leash.policy.load import PolicyError, load_policy_file, parse_policy, validate_policy
+from toolwrit.policy.load import PolicyError, load_policy_file, parse_policy, validate_policy
 
 
 def rejects(raw: str, *fragments: str) -> PolicyError:

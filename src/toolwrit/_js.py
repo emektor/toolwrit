@@ -1,8 +1,8 @@
 """
 JavaScript-compatible primitives.
 
-This module exists for exactly one reason: a Leash audit chain written by the
-Python port must verify under the TypeScript ``leash verify``, and vice versa.
+This module exists for exactly one reason: a Toolwrit audit chain written by the
+Python port must verify under the TypeScript ``toolwrit verify``, and vice versa.
 The chain hashes a *canonical string*, so every byte of that string has to be
 produced the way JavaScript would produce it -- which is not the way Python
 does it by default.

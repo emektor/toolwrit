@@ -1,7 +1,7 @@
 """
 The runtime object an application holds.
 
-Leash ties together the three pieces that have to agree with each other:
+Toolwrit ties together the three pieces that have to agree with each other:
 the policy engine (may this happen), the ledger (is there capacity left) and
 the audit chain (what actually happened). Keeping them behind one object is
 what stops an integration from recording a decision it did not enforce.
@@ -46,11 +46,11 @@ ApprovalHandler = Callable[[ToolCall, Decision], "bool | Awaitable[bool]"]
 DEFAULT_WARN_AT = [0.8, 0.95]
 
 
-class LeashDenied(Exception):
+class ToolwritDenied(Exception):
     """Thrown when a guarded call is refused. Catch this to feed the agent an error."""
 
     def __init__(self, tool: str, decision: Decision, audit_hash: str) -> None:
-        super().__init__(f"leash: {tool} denied — {decision.reason}")
+        super().__init__(f"toolwrit: {tool} denied — {decision.reason}")
         self.tool = tool
         self.decision = decision
         #: Hash of the audit entry recording the refusal. Quote it in support tickets.
@@ -87,7 +87,7 @@ def _format(value: float) -> str:
     return js_locale_integer(value) if float(value).is_integer() else js_to_fixed(value, 2)
 
 
-class Leash:
+class Toolwrit:
     def __init__(
         self,
         policy: Policy,
@@ -119,7 +119,7 @@ class Leash:
             plan = policy.plan
             self._audit.record(
                 self._to_call(
-                    "leash:plan",
+                    "toolwrit:plan",
                     {
                         "purpose": plan.purpose,
                         "approvedBy": plan.approvedBy,
@@ -158,7 +158,7 @@ class Leash:
 
         The decision is written to the audit chain before ``execute`` is invoked,
         so a crash inside the tool still leaves evidence that the call was
-        authorised. A refusal raises LeashDenied rather than returning a
+        authorised. A refusal raises ToolwritDenied rather than returning a
         sentinel, because a silently-skipped side effect is the worst possible
         failure mode here.
         """
@@ -255,14 +255,14 @@ class Leash:
         """Record the verdict, then act on it. Recording comes first, always."""
         entry = self._audit.record(call, decision, self._usage_for_audit())
         if decision.effect != "allow":
-            raise LeashDenied(tool, decision, entry.hash)
+            raise ToolwritDenied(tool, decision, entry.hash)
         self._ledger.count_call(call.at)
 
     def _decision_lock(self) -> asyncio.Lock:
         """
         The async critical section's lock, created on the running loop.
 
-        Built lazily because a Leash may be constructed outside any event loop,
+        Built lazily because a Toolwrit may be constructed outside any event loop,
         and an asyncio.Lock bound to the wrong loop is worse than none. The
         synchronous ``guard`` does not take it: it has no await point, so it
         cannot interleave with itself on one thread. Mixing ``guard`` and
@@ -377,7 +377,7 @@ class Leash:
 
                 self._audit.record(
                     self._to_call(
-                        "leash:warning",
+                        "toolwrit:warning",
                         {
                             "dimension": warning.dimension,
                             "threshold": warning.threshold,

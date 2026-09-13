@@ -1,5 +1,5 @@
 """
-The ``leash`` binary.
+The ``toolwrit`` binary.
 
 A policy is only useful if it can be reviewed (``explain``), tested in CI
 (``check``) and defended afterwards (``verify``) without writing any code.
@@ -8,7 +8,7 @@ the same output and the same exit codes as the TypeScript CLI, so a chain or a
 policy can move between the two implementations without anyone relearning
 anything.
 
-``leash run`` -- the MCP proxy -- is deliberately absent here; see the README.
+``toolwrit run`` -- the MCP proxy -- is deliberately absent here; see the README.
 
 Argument parsing is hand-rolled rather than argparse-driven because the
 TypeScript grammar it has to match is not argparse's, in particular the bare
@@ -23,21 +23,21 @@ from typing import Sequence
 
 from . import __version__
 from .audit.verify import verify_file
-from .leash import Leash
+from .toolwrit import Toolwrit
 from .policy.load import PolicyError, load_policy_file
 from .types import ArgConstraint, Decision, Policy
 from ._js import js_json, js_number
 
-USAGE = """leash — a deterministic leash for AI agents.
+USAGE = """toolwrit — a written authority for AI agents.
 
 Usage:
-  leash verify  <audit.jsonl>
-  leash check   --policy <file> --tool <name> [--args <json>]
-  leash explain --policy <file>
+  toolwrit verify  <audit.jsonl>
+  toolwrit check   --policy <file> --tool <name> [--args <json>]
+  toolwrit explain --policy <file>
 
 Options:
   --help       Show this text.
-  --version    Print the leash version.
+  --version    Print the toolwrit version.
 
 Exit codes:
   verify   0 when the chain is intact, 1 when it is not.
@@ -100,7 +100,7 @@ def _reject_unknown_flags(
     unknown = sorted(set(parsed.flags) - set(allowed) - {"help", "version"})
     if unknown:
         names = ", ".join(f'"--{flag}"' for flag in unknown)
-        raise CliError(f"unknown flag(s) {names} for `leash {subcommand}`")
+        raise CliError(f"unknown flag(s) {names} for `toolwrit {subcommand}`")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -124,19 +124,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_explain(parsed)
         if subcommand == "run":
             raise CliError(
-                "`leash run` (the MCP proxy) is not part of the Python port; "
+                "`toolwrit run` (the MCP proxy) is not part of the Python port; "
                 "use the TypeScript CLI for it"
             )
         raise CliError(f'unknown subcommand "{subcommand}"\n\n{USAGE}')
     except CliError as err:
-        sys.stderr.write(f"leash: {err}\n")
+        sys.stderr.write(f"toolwrit: {err}\n")
         return 1
 
 
 def _cmd_verify(parsed: ParsedArgs) -> int:
     file = parsed.positional[1] if len(parsed.positional) > 1 else None
     if not file:
-        raise CliError("verify needs an audit file, e.g. `leash verify audit.jsonl`")
+        raise CliError("verify needs an audit file, e.g. `toolwrit verify audit.jsonl`")
 
     # Silently ignoring an unimplemented flag would be a fail-open in the one
     # command whose job is detecting tampering: `verify --against` exists to
@@ -146,7 +146,7 @@ def _cmd_verify(parsed: ParsedArgs) -> int:
         raise CliError(
             "`verify --against <anchor>` is not implemented in the Python CLI; "
             "the chain check alone cannot detect a truncated log, so use the "
-            "TypeScript CLI (`leash verify <file> --against <anchor>`) rather "
+            "TypeScript CLI (`toolwrit verify <file> --against <anchor>`) rather "
             "than reading this run as a pass"
         )
     _reject_unknown_flags(parsed, (), "verify")
@@ -190,7 +190,7 @@ def _cmd_check(parsed: ParsedArgs) -> int:
         args = value
 
     # No audit file and no execution: `check` is a dry run, safe to put in CI.
-    decision = Leash(policy).check(tool, args)
+    decision = Toolwrit(policy).check(tool, args)
     _print_decision(tool, decision)
     return 0 if decision.effect == "allow" else 1 if decision.effect == "deny" else 2
 

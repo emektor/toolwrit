@@ -1,5 +1,5 @@
 """
-The ``leash`` binary.
+The ``toolwrit`` binary.
 
 A policy tool that cannot be run from a shell script does not get adopted, so
 the three code-free subcommands are pinned here: their output, and -- more
@@ -13,9 +13,9 @@ from pathlib import Path
 import pytest
 
 from helpers import T0, call
-from leash.audit.chain import AuditLog
-from leash.cli import main, parse_args
-from leash.types import Decision
+from toolwrit.audit.chain import AuditLog
+from toolwrit.cli import main, parse_args
+from toolwrit.types import Decision
 
 POLICY = """
 version: "1"
@@ -100,7 +100,7 @@ class TestCheck:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         assert main(["check", "--tool", "t"]) == 1
-        assert capsys.readouterr().err == "leash: missing required --policy <value>\n"
+        assert capsys.readouterr().err == "toolwrit: missing required --policy <value>\n"
 
     def test_reports_a_bad_policy_as_one_line(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -109,7 +109,7 @@ class TestCheck:
         bad.write_text('version: "1"\nrules: []\nnope: 1\n', encoding="utf-8")
         assert main(["check", "--policy", str(bad), "--tool", "t"]) == 1
         err = capsys.readouterr().err
-        assert err.startswith("leash: ") and err.count("\n") == 1
+        assert err.startswith("toolwrit: ") and err.count("\n") == 1
         assert '"nope"' in err
 
 
@@ -180,10 +180,10 @@ class TestExplain:
 class TestTopLevel:
     def test_prints_usage_with_no_arguments(self, capsys: pytest.CaptureFixture[str]) -> None:
         assert main([]) == 0
-        assert capsys.readouterr().out.startswith("leash — a deterministic leash")
+        assert capsys.readouterr().out.startswith("toolwrit — a written authority")
 
     def test_prints_the_version(self, capsys: pytest.CaptureFixture[str]) -> None:
-        from leash import __version__
+        from toolwrit import __version__
 
         assert main(["--version"]) == 0
         assert capsys.readouterr().out == f"{__version__}\n"

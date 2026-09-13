@@ -1,7 +1,7 @@
 """
 Run-scoped consumption tracking.
 
-The ledger is the "capacity" half of Leash: rules decide *what* an agent may
+The ledger is the "capacity" half of Toolwrit: rules decide *what* an agent may
 do, the ledger decides *how much*. It is deliberately dumb -- a set of
 counters -- because the interesting logic belongs in the engine, and because
 a counter is trivially auditable.
@@ -39,11 +39,11 @@ def _require_consumption(name: str, value: float) -> float:
     exception, not as a limit that quietly stops applying.
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError(f"leash: {name} must be a finite number, got {value!r}")
+        raise TypeError(f"toolwrit: {name} must be a finite number, got {value!r}")
     if not math.isfinite(value):
-        raise TypeError(f"leash: {name} must be a finite number, got {value!r}")
+        raise TypeError(f"toolwrit: {name} must be a finite number, got {value!r}")
     if value < 0:
-        raise ValueError(f"leash: {name} must not be negative, got {value}")
+        raise ValueError(f"toolwrit: {name} must not be negative, got {value}")
     return value
 
 

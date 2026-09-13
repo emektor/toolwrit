@@ -1,7 +1,7 @@
 """
 The tamper-evident audit chain.
 
-This is the half of Leash an auditor actually reads. The tests below prove
+This is the half of Toolwrit an auditor actually reads. The tests below prove
 two things: that the canonical form is stable and JavaScript-shaped (so a log
 written by one process verifies in another, in either language), and that
 every realistic edit to a written log is detected, with the right entry and
@@ -19,8 +19,8 @@ from typing import Any
 import pytest
 
 from helpers import T0, call
-from leash._js import UNDEFINED, js_number, js_to_fixed
-from leash.audit.chain import (
+from toolwrit._js import UNDEFINED, js_number, js_to_fixed
+from toolwrit.audit.chain import (
     GENESIS,
     AuditEntry,
     AuditLog,
@@ -28,8 +28,8 @@ from leash.audit.chain import (
     entry_from_dict,
     hash_entry,
 )
-from leash.audit.verify import verify_chain, verify_file
-from leash.types import Decision, Violation
+from toolwrit.audit.verify import verify_chain, verify_file
+from toolwrit.types import Decision, Violation
 
 ALLOW = Decision(effect="allow", rule="r1", reason='allowed by rule "r1"', violations=[])
 DENY = Decision(

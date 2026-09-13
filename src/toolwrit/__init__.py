@@ -1,11 +1,11 @@
 """
-Leash — a deterministic leash for AI agents.
+Toolwrit — a written authority for AI agents.
 
 Allowlist the tools, cap the budget, prove what happened.
 
 A Python port of the TypeScript reference implementation. The audit chains the
 two produce are byte-compatible: a log written here verifies under
-``leash verify`` from the npm package, and vice versa.
+``toolwrit verify`` from the npm package, and vice versa.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from .audit.chain import (
 )
 from .audit.verify import VerifyFailure, VerifyResult, verify_chain, verify_file
 from .budget.ledger import Ledger, TokenPrice
-from .leash import ApprovalHandler, Leash, LeashDenied
+from .toolwrit import ApprovalHandler, Toolwrit, ToolwritDenied
 from .policy.engine import evaluate
 from .policy.load import PolicyError, load_policy_file, parse_policy, validate_policy
 from .policy.match import MISSING, matches_any_glob, matches_glob, resolve_path
@@ -48,8 +48,8 @@ from .types import (
 __all__ = [
     "__version__",
     # runtime
-    "Leash",
-    "LeashDenied",
+    "Toolwrit",
+    "ToolwritDenied",
     "ApprovalHandler",
     # policy
     "evaluate",

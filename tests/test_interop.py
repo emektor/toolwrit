@@ -2,7 +2,7 @@
 Cross-language hash-chain compatibility.
 
 The claim this file exists to prove: a chain written by the Python port
-verifies under the TypeScript ``leash verify``, and a chain written by the
+verifies under the TypeScript ``toolwrit verify``, and a chain written by the
 TypeScript implementation verifies here. That only holds if the canonical
 string is byte-identical in both languages, so the tests go further than
 "both say ok" -- they compare the hashes themselves, which fail on a single
@@ -24,12 +24,12 @@ from typing import Any
 import pytest
 
 from helpers import T0
-from leash.audit.chain import AuditLog, canonicalize
-from leash.audit.verify import verify_file
-from leash.types import Decision, ToolCall, Violation
+from toolwrit.audit.chain import AuditLog, canonicalize
+from toolwrit.audit.verify import verify_file
+from toolwrit.types import Decision, ToolCall, Violation
 
 #: The read-only TypeScript reference implementation, beside this package.
-TS_ROOT = Path(os.environ.get("LEASH_TS_ROOT", Path(__file__).resolve().parents[2] / "leash"))
+TS_ROOT = Path(os.environ.get("TOOLWRIT_TS_ROOT", Path(__file__).resolve().parents[2] / "leash"))
 TS_CLI = TS_ROOT / "dist" / "cli.js"
 TS_INDEX = TS_ROOT / "dist" / "index.js"
 INTEROP = Path(__file__).parent / "interop"

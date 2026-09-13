@@ -8,9 +8,9 @@ which is the only version an auditor accepts.
 
 The format is JSONL -- one entry per line -- so it survives a crash mid-run
 and can be tailed, grepped and shipped to any log pipeline unchanged. A file
-written here verifies under the TypeScript ``leash verify`` and the other way
+written here verifies under the TypeScript ``toolwrit verify`` and the other way
 round, which is why ``canonicalize`` goes through the JavaScript-compatible
-serialiser in ``leash._js`` rather than through Python's ``json``.
+serialiser in ``toolwrit._js`` rather than through Python's ``json``.
 """
 
 from __future__ import annotations
