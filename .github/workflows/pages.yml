@@ -1,0 +1,42 @@
+# Publish site/ to GitHub Pages.
+#
+# GitHub Pages can only serve a branch's root or its `docs/` folder, and the
+# landing page lives in `site/`. Rather than move the file to satisfy the
+# hosting, this uploads `site/` as the artifact -- the layout stays honest and
+# the page keeps its own directory.
+#
+# One-time: Settings -> Pages -> Source: "GitHub Actions".
+
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths: ['site/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# A queued deploy should win over one already running; in-progress runs are
+# left alone so a half-finished deploy is never cancelled mid-upload.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
