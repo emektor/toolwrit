@@ -65,6 +65,17 @@ interface Harness {
   outputErrors: Error[];
   /** Every message the downstream server actually received, in order. */
   serverLog(): Message[];
+  /**
+   * Wait until the downstream server has actually received the named tools.
+   *
+   * A notification has no reply, so there is nothing to await on it. Sending
+   * an unrelated request afterwards and waiting for *that* reply looks like a
+   * barrier but is not one: `guard` is asynchronous, so a plain request that
+   * is forwarded synchronously can overtake a notification still inside the
+   * policy check. Tests that did this passed locally and failed on a slower
+   * machine. Wait for the condition itself instead.
+   */
+  serverSaw(tools: string[]): Promise<void>;
   toolwrit: Toolwrit;
   stop(): Promise<void>;
   exited(): Promise<number>;
@@ -164,6 +175,21 @@ async function withProxy(
         .filter((line) => line.trim().length > 0)
         .map((line) => JSON.parse(line) as Message);
     },
+    async serverSaw(tools) {
+      const deadline = Date.now() + 5000;
+      for (;;) {
+        const seen = toolsCalled(harness.serverLog());
+        if (seen.length >= tools.length) {
+          assert.deepEqual(seen, tools);
+          return;
+        }
+        if (Date.now() > deadline) {
+          assert.deepEqual(seen, tools, 'timed out waiting for the downstream server');
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    },
     toolwrit,
     stop: () => proxy.stop(),
     exited: () => proxy.exited(),
@@ -199,6 +225,20 @@ function isError(message: Message): boolean {
 }
 
 /** Intercept the proxy's operator warnings, which go straight to process.stderr. */
+/**
+ * Poll until `ready` is true, or fail saying what never happened.
+ *
+ * For outcomes a notification produces: there is no reply to await, and a
+ * later request is not a barrier because `guard` is asynchronous.
+ */
+async function until(ready: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (!ready()) {
+    if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 function captureStderr(): { text(): string; restore(): void } {
   const original = process.stderr.write;
   let text = '';
@@ -330,8 +370,10 @@ describe('mcp proxy: the id-less tools/call bypass', () => {
       const stderr = captureStderr();
       try {
         h.send({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'secret.dump' } });
-        // A later, allowed request proves the id-less one was fully processed
-        // first: messages are handled in order, synchronously, as they arrive.
+        // Wait for the refusal itself. A later request is not a barrier: it is
+        // forwarded synchronously and can overtake a notification that is
+        // still inside the policy check.
+        await until(() => /denied notification/.test(stderr.text()), 'the refusal');
         await h.call({ jsonrpc: '2.0', id: 'after', method: 'initialize' });
 
         assert.deepEqual(toolsCalled(h.serverLog()), []);
@@ -352,9 +394,9 @@ describe('mcp proxy: the id-less tools/call bypass', () => {
         method: 'tools/call',
         params: { name: 'fs.read', arguments: { path: '/tmp/ok' } },
       });
+      await h.serverSaw(['fs.read']);
       await h.call({ jsonrpc: '2.0', id: 'after', method: 'initialize' });
 
-      assert.deepEqual(toolsCalled(h.serverLog()), ['fs.read']);
       // Still no reply: the client did not ask for one.
       assert.deepEqual(h.received.map((m) => m.id), ['after']);
     });
@@ -376,9 +418,10 @@ describe('mcp proxy: the id-less tools/call bypass', () => {
           method: 'tools/call',
           params: { name: 'fs.read', arguments: { path: '/tmp/ok' } },
         });
+        await h.serverSaw(['fs.read']);
+        await until(() => /denied notification/.test(stderr.text()), 'the refusal');
         await h.call({ jsonrpc: '2.0', id: 'after', method: 'initialize' });
 
-        assert.deepEqual(toolsCalled(h.serverLog()), ['fs.read']);
         assert.deepEqual(h.received.map((m) => m.id), ['after']);
         assert.match(stderr.text(), /denied notification tools\/call "secret.dump"/);
       } finally {
