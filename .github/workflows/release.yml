@@ -1,0 +1,147 @@
+# Release: publish both packages from one tag.
+#
+# The two implementations share a hash chain, so they ship together or not at
+# all. A tag of the form `v0.1.0` publishes `toolwrit` 0.1.0 to npm and the
+# same version to PyPI. If either version in the repository disagrees with the
+# tag, the run fails before anything is published.
+#
+# Neither registry needs a stored token. Both use OIDC trusted publishing: the
+# registry verifies the workflow identity (this repository, this file) against
+# a publisher it has on record, and mints a short-lived credential for that run.
+# There is no long-lived secret to leak, and a fork cannot publish.
+#
+# One-time setup, per registry:
+#
+#   PyPI  https://pypi.org/manage/account/publishing/ -- can be added BEFORE the
+#         project exists ("pending publisher"), which also reserves the name.
+#         owner: emektor  repo: toolwrit  workflow: release.yml  env: pypi
+#
+#   npm   requires the package to exist first, so version 0.1.0 is published
+#         once from a terminal (`npm publish` in js/). After that, Settings ->
+#         Trusted publisher on npmjs.com/package/toolwrit, same three fields,
+#         and every later version comes from here.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version to publish, e.g. v0.1.1 (must already be tagged)'
+        required: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Nothing is published until the full suite passes on the tagged commit and
+  # both package versions match the tag. A release is the one place where a
+  # skipped check costs something that cannot be taken back.
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: version
+        name: Tag and package versions must agree
+        run: |
+          ref='${{ github.event.inputs.tag || github.ref_name }}'
+          version="${ref#v}"
+          js=$(node -p "require('./js/package.json').version")
+          py=$(python -c "import re,pathlib;print(re.search(r'^version = \"(.+)\"', pathlib.Path('python/pyproject.toml').read_text(), re.M).group(1))")
+          echo "tag=$version js=$js python=$py"
+          if [ "$js" != "$version" ] || [ "$py" != "$version" ]; then
+            echo "::error::version mismatch: tag $version, js $js, python $py"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: npm ci
+        working-directory: js
+      - run: npm run typecheck
+        working-directory: js
+      - run: npm test
+        working-directory: js
+      - run: npm run build
+        working-directory: js
+
+      - run: pip install pytest pyyaml
+      - run: python -m pytest -q
+        working-directory: python
+
+  npm:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write        # the OIDC token npm exchanges for a publish credential
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      # Trusted publishing needs npm >= 11.5.1; the bundled npm is older.
+      - run: npm install -g npm@latest
+      - run: npm ci
+        working-directory: js
+      - run: npm run build
+        working-directory: js
+      - run: npm publish --provenance --access public
+        working-directory: js
+
+  pypi:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install build
+      - run: python -m build
+        working-directory: python
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python/dist
+
+  # Both packages are live before the release notes exist, so a reader who
+  # follows the release can actually install what it describes.
+  github-release:
+    needs: [verify, npm, pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          cat > notes.md <<EOF
+          npm: \`npm install toolwrit@$VERSION\`
+          PyPI: \`pip install toolwrit==$VERSION\`
+
+          Both packages are built from this commit and share one audit-chain
+          format. See SECURITY-REVIEW.md for the independent review, including
+          what is still open.
+          EOF
+          gh release create "v$VERSION" --title "v$VERSION" --notes-file notes.md
