@@ -227,6 +227,100 @@ def _validate_rule(raw: Any, path: str) -> PolicyRule:
     return out
 
 
+def _quantifier_at(pattern: str, index: int) -> str | None:
+    """The quantifier token starting at ``index``, or None if there is not one."""
+    if index >= len(pattern):
+        return None
+    ch = pattern[index]
+    if ch in ("*", "+"):
+        return ch
+    if ch == "{":
+        close = pattern.find("}", index)
+        if close == -1:
+            return None
+        body = pattern[index + 1 : close]
+        if not re.fullmatch(r"\d*,?\d*", body):
+            return None
+        parts = body.split(",")
+        if len(parts) == 1:
+            upper = float(parts[0]) if parts[0] else 0.0
+        else:
+            upper = float("inf") if parts[1] == "" else (float(parts[1]) if parts[1] else 0.0)
+        # Only an open-ended or plural repetition can blow up; {0,1} cannot.
+        return "{" + body + "}" if upper > 1 else None
+    return None
+
+
+def nested_quantifier(pattern: str) -> str | None:
+    """
+    Reject a regular expression whose shape can backtrack catastrophically.
+
+    ``matches`` patterns are compiled once at load but RUN against argument
+    values, which are model output -- the untrusted side. A pattern with a
+    quantifier applied to a group that already contains one, ``^(([a-z]+)+@)+x$``
+    and its family, takes exponential time on a crafted 44-character value: over
+    ten seconds in both implementations, with the whole enforcement point frozen
+    because evaluation is synchronous.
+
+    The check is STRUCTURAL rather than timed on purpose. Rejecting a pattern
+    because it ran slowly would make acceptance depend on the machine and the
+    regex engine, so the same policy could load here and fail in TypeScript --
+    and "the same policy always reaches the same verdict" is the property this
+    library is for. A shape test gives both languages the same answer.
+
+    It is a heuristic, and the docs say so: it catches the classic nested-
+    quantifier family, not every pathological pattern. A linear-time engine is
+    the real fix and would cost the single-dependency property, so it is a
+    deliberate roadmap item rather than a silent gap.
+
+    Kept byte-for-byte equivalent to the TypeScript ``nestedQuantifier``.
+    """
+    stack: list[bool] = []
+    in_class = False
+    i = 0
+
+    while i < len(pattern):
+        ch = pattern[i]
+
+        if ch == "\\":
+            i += 2  # An escaped character is a literal, never syntax.
+            continue
+        if in_class:
+            if ch == "]":
+                in_class = False
+            i += 1
+            continue
+        if ch == "[":
+            in_class = True
+            i += 1
+            continue
+        if ch == "(":
+            stack.append(False)
+            i += 1
+            continue
+        if ch == ")":
+            closed = stack.pop() if stack else None
+            if closed is not None:
+                nxt = _quantifier_at(pattern, i + 1)
+                if nxt is not None:
+                    if closed:
+                        return (
+                            f'nested quantifier: a "{nxt}" applied to a group that '
+                            "already contains a quantifier"
+                        )
+                    # The group is quantified, so the group it sits inside now
+                    # counts as containing a quantifier too.
+                    if stack:
+                        stack[-1] = True
+            i += 1
+            continue
+        if _quantifier_at(pattern, i) is not None and stack:
+            stack[-1] = True
+        i += 1
+
+    return None
+
+
 def _validate_constraint(raw: Any, path: str) -> ArgConstraint:
     c = _require_object(raw, path)
     _reject_unknown_keys(c, _CONSTRAINT_KEYS, path)
@@ -239,6 +333,15 @@ def _validate_constraint(raw: Any, path: str) -> ArgConstraint:
             re.compile(matches)
         except re.error as err:
             raise PolicyError(f'"matches" is not a valid regexp ({err})', path) from err
+        unsafe = nested_quantifier(matches)
+        if unsafe is not None:
+            raise PolicyError(
+                f'"matches" has a shape that can backtrack catastrophically -- {unsafe}. '
+                "Argument values come from the model, so a crafted value would freeze "
+                'enforcement. Prefer "startsWith", "oneOf" or "excludes", or rewrite the '
+                "pattern without the nesting",
+                path,
+            )
 
     for key in ("startsWith", "excludes", "urlHosts"):
         value = _get(c, key)

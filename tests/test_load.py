@@ -438,3 +438,65 @@ class TestPlanValidation:
             "  warnAt: [0.9, 0.2, 0.5]\nrules: []\n"
         )
         assert p.plan.warnAt == [0.2, 0.5, 0.9]
+
+
+class TestCatastrophicBacktracking:
+    """
+    A ``matches`` pattern is compiled once but RUN against argument values,
+    which are model output. Evaluation is synchronous, so one crafted value
+    against a nested-quantifier pattern freezes the whole enforcement point --
+    the first pattern below hung both implementations for over ten seconds on a
+    44-character input before this check existed.
+    """
+
+    @staticmethod
+    def load(pattern: str):
+        return parse_policy(
+            'version: "1"\ndefault: deny\nrules:\n  - id: r\n    tools: ["t"]\n'
+            "    effect: allow\n    when:\n      v:\n        matches: "
+            + json.dumps(pattern)
+            + "\n"
+        )
+
+    @pytest.mark.parametrize(
+        "pattern",
+        [
+            r"^(([a-zA-Z0-9]+)+@)+example\.com$",
+            r"(a+)+$",
+            r"(a*)*b",
+            r"(\w+\s?)*$",
+            r"((ab)+)+",
+            r"(x{2,})+",
+        ],
+    )
+    def test_rejects_the_nested_quantifier_family(self, pattern):
+        with pytest.raises(PolicyError, match="backtrack catastrophically"):
+            self.load(pattern)
+
+    @pytest.mark.parametrize(
+        "pattern",
+        [
+            r"^[A-Za-z0-9._%+-]+@(support\.)?example\.com$",
+            r"^/srv/[a-z]+/[a-z]+\.txt$",
+            r"^(abc)+$",
+            r"(a|b){2,5}",
+            r"^(foo|bar)*$",
+            r"(\d+)\.(\d+)",
+        ],
+    )
+    def test_accepts_what_authors_actually_write(self, pattern):
+        self.load(pattern)
+
+    def test_a_quantifier_inside_a_character_class_is_not_syntax(self):
+        self.load(r"[+*]+")
+
+    def test_an_escaped_parenthesis_is_not_a_group(self):
+        self.load(r"\(a+\)+")
+
+    def test_quantifiers_that_cannot_blow_up_are_ignored(self):
+        self.load(r"(a?)+")
+        self.load(r"(a{0,1})+")
+
+    def test_names_the_offending_quantifier(self):
+        with pytest.raises(PolicyError, match=r'nested quantifier: a "\+"'):
+            self.load(r"(a+)+")
