@@ -9,7 +9,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { Leash, LeashDenied } from '../src/leash.js';
+import { Toolwrit, ToolwritDenied } from '../src/toolwrit.js';
 import { parsePolicy } from '../src/policy/load.js';
 import { evaluate } from '../src/policy/engine.js';
 import { Ledger } from '../src/budget/ledger.js';
@@ -21,9 +21,9 @@ const ALLOW_ALL = (budget: string): Policy =>
 
 describe('bytes: measurement', () => {
   const sizeAfter = async (result: unknown): Promise<number> => {
-    const leash = new Leash({ policy: ALLOW_ALL('calls: 100'), now: frozenClock() });
-    await leash.guard('t', {}, () => result);
-    return leash.usage().bytes;
+    const toolwrit = new Toolwrit({ policy: ALLOW_ALL('calls: 100'), now: frozenClock() });
+    await toolwrit.guard('t', {}, () => result);
+    return toolwrit.usage().bytes;
   };
 
   it('measures strings as UTF-8, not as code units', async () => {
@@ -63,20 +63,20 @@ describe('bytes: measurement', () => {
 
 describe('bytes: the ceiling', () => {
   it('denies the next call once the ceiling is reached', async () => {
-    const leash = new Leash({ policy: ALLOW_ALL('bytes: 20'), now: frozenClock() });
+    const toolwrit = new Toolwrit({ policy: ALLOW_ALL('bytes: 20'), now: frozenClock() });
 
     const page = 'x'.repeat(12);
-    await leash.guard('crm.read', {}, () => page);
-    assert.equal(leash.usage().bytes, 12);
+    await toolwrit.guard('crm.read', {}, () => page);
+    assert.equal(toolwrit.usage().bytes, 12);
 
     // Still under, so this one runs -- and takes the total past the ceiling.
-    await leash.guard('crm.read', {}, () => page);
-    assert.equal(leash.usage().bytes, 24);
+    await toolwrit.guard('crm.read', {}, () => page);
+    assert.equal(toolwrit.usage().bytes, 24);
 
     await assert.rejects(
-      () => leash.guard('crm.read', {}, () => page),
+      () => toolwrit.guard('crm.read', {}, () => page),
       (err: unknown) => {
-        assert.ok(err instanceof LeashDenied);
+        assert.ok(err instanceof ToolwritDenied);
         assert.equal(err.decision.violations[0]?.constraint, 'bytes');
         return true;
       }
@@ -87,11 +87,11 @@ describe('bytes: the ceiling', () => {
     // A result's size is unknowable before the tool runs, so the call that
     // breaches the ceiling always completes. Pinned so nobody reads the
     // ceiling as a hard cap on what a single call can return.
-    const leash = new Leash({ policy: ALLOW_ALL('bytes: 10'), now: frozenClock() });
-    await leash.guard('dump', {}, () => 'y'.repeat(5000));
+    const toolwrit = new Toolwrit({ policy: ALLOW_ALL('bytes: 10'), now: frozenClock() });
+    await toolwrit.guard('dump', {}, () => 'y'.repeat(5000));
 
-    assert.equal(leash.usage().bytes, 5000);
-    await assert.rejects(() => leash.guard('dump', {}, () => 'z'), LeashDenied);
+    assert.equal(toolwrit.usage().bytes, 5000);
+    await assert.rejects(() => toolwrit.guard('dump', {}, () => 'z'), ToolwritDenied);
   });
 
   it('denies before a matching allow rule gets a say', () => {
@@ -111,10 +111,10 @@ describe('bytes: the ceiling', () => {
   });
 
   it('is untouched when the policy sets no bytes ceiling', async () => {
-    const leash = new Leash({ policy: ALLOW_ALL('calls: 100'), now: frozenClock() });
-    await leash.guard('dump', {}, () => 'q'.repeat(100_000));
-    assert.equal(leash.usage().bytes, 100_000);
-    await leash.guard('dump', {}, () => 'ok');
+    const toolwrit = new Toolwrit({ policy: ALLOW_ALL('calls: 100'), now: frozenClock() });
+    await toolwrit.guard('dump', {}, () => 'q'.repeat(100_000));
+    assert.equal(toolwrit.usage().bytes, 100_000);
+    await toolwrit.guard('dump', {}, () => 'ok');
   });
 
   it('trips at the ceiling exactly, not one byte past it', () => {
@@ -134,9 +134,9 @@ describe('bytes: reporting', () => {
         `plan:\n  purpose: nightly export\n  warnAt: [0.5]\nrules: []\n`
     );
     const warnings: BudgetWarning[] = [];
-    const leash = new Leash({ policy: p, now: frozenClock(), onWarn: (w) => warnings.push(w) });
+    const toolwrit = new Toolwrit({ policy: p, now: frozenClock(), onWarn: (w) => warnings.push(w) });
 
-    await leash.guard('crm.read', {}, () => 'a'.repeat(600));
+    await toolwrit.guard('crm.read', {}, () => 'a'.repeat(600));
 
     assert.equal(warnings.length, 1);
     assert.equal(warnings[0]?.dimension, 'bytes');
@@ -145,14 +145,14 @@ describe('bytes: reporting', () => {
   });
 
   it('carries the byte total into the audit entry', async () => {
-    const leash = new Leash({ policy: ALLOW_ALL('bytes: 1000'), now: frozenClock() });
-    await leash.guard('a', {}, () => 'hello');
-    await leash.guard('b', {}, () => 'world');
+    const toolwrit = new Toolwrit({ policy: ALLOW_ALL('bytes: 1000'), now: frozenClock() });
+    await toolwrit.guard('a', {}, () => 'hello');
+    await toolwrit.guard('b', {}, () => 'world');
 
     // Each entry records usage as of its own decision, so the second entry
     // carries what the first call drained.
-    assert.equal(leash.entries()[0]?.usage.bytes, 0);
-    assert.equal(leash.entries()[1]?.usage.bytes, 5);
+    assert.equal(toolwrit.entries()[0]?.usage.bytes, 0);
+    assert.equal(toolwrit.entries()[1]?.usage.bytes, 5);
   });
 });
 

@@ -1,10 +1,12 @@
-# Leash
+# Toolwrit
 
-**A deterministic leash for AI agents.** Allowlist the tools, cap the budget, prove what happened.
+**A written authority for AI agents.** Allowlist the tools, cap the budget, prove what happened.
 
 Apache-2.0 · Node >= 20 · Python >= 3.10
 
-Leash is a **library and a sidecar, not a gateway**. Your traffic never leaves your infrastructure. You do not point your agent at someone else's cloud — you wrap your tool handlers in three lines, or you put `leash run --policy leash.yaml --` in front of an MCP server you already run.
+A writ is a written order from an authority. The policy file is that order; the *return of the writ* — the historical record of what was done under it — is the audit log. Both halves of the product are in the name.
+
+Toolwrit is a **library and a sidecar, not a gateway**. Your traffic never leaves your infrastructure. You do not point your agent at someone else's cloud — you wrap your tool handlers in three lines, or you put `toolwrit run --policy toolwrit.yaml --` in front of an MCP server you already run.
 
 ---
 
@@ -14,19 +16,19 @@ An agent with tool access has whatever authority its tools have.
 A `fs.write` tool is a write primitive; a `billing.refund` tool is a refund primitive. The model decides when to pull them.
 Prompt-level guardrails — "never touch files outside the workspace" — are advisory. They live inside the same text channel the attacker (or the confused model) controls.
 You need enforcement that sits **outside the model**: a check that runs on the call itself, cannot be argued with, and leaves a record.
-That is all Leash is.
+That is all Toolwrit is.
 
 ---
 
 ## 60-second start
 
 ```
-npm install shortleash
+npm install toolwrit
 ```
 
-The package name is `shortleash`; the binary it installs is `leash`. A Python port with the same policy language and a compatible audit chain uses the same name on PyPI — see [`docs/python.md`](docs/python.md).
+The package installs a binary of the same name, `toolwrit`. A Python port with the same policy language and a compatible audit chain uses the same name on PyPI — see [`docs/python.md`](docs/python.md).
 
-**`leash.yaml`**
+**`toolwrit.yaml`**
 
 ```yaml
 version: "1"
@@ -57,25 +59,25 @@ rules:
 **The three-line code change.** Wherever you currently execute a tool call, wrap it:
 
 ```ts
-import { Leash, LeashDenied, loadPolicyFile } from 'shortleash';
+import { Toolwrit, ToolwritDenied, loadPolicyFile } from 'toolwrit';
 
-const leash = new Leash({
-  policy: loadPolicyFile('./leash.yaml'),
+const toolwrit = new Toolwrit({
+  policy: loadPolicyFile('./toolwrit.yaml'),
   auditFile: './audit.jsonl',
 });
 
 // before:  const result = await tools[name](args);
 // after:
-const result = await leash.guard(name, args, () => tools[name](args));
+const result = await toolwrit.guard(name, args, () => tools[name](args));
 ```
 
-That is the whole integration. `guard` evaluates the call, writes the decision to the audit chain, and only then invokes your handler. A refusal throws `LeashDenied` — never a silently skipped side effect:
+That is the whole integration. `guard` evaluates the call, writes the decision to the audit chain, and only then invokes your handler. A refusal throws `ToolwritDenied` — never a silently skipped side effect:
 
 ```ts
 try {
-  return await leash.guard(name, args, () => tools[name](args));
+  return await toolwrit.guard(name, args, () => tools[name](args));
 } catch (err) {
-  if (err instanceof LeashDenied) {
+  if (err instanceof ToolwritDenied) {
     // Hand the boundary back to the model so it can adapt.
     return { isError: true, content: [{ type: 'text', text: err.message }] };
   }
@@ -86,22 +88,22 @@ try {
 Metering is explicit, because the pricing assumption should be visible in your code rather than guessed by ours:
 
 ```ts
-leash.meter(inputTokens, outputTokens, { input: 0.003, output: 0.015 }); // USD per 1k tokens
-leash.spend(0.02);                                                       // non-token spend
+toolwrit.meter(inputTokens, outputTokens, { input: 0.003, output: 0.015 }); // USD per 1k tokens
+toolwrit.spend(0.02);                                                       // non-token spend
 ```
 
 And at the end of the run:
 
 ```ts
-console.log(leash.usage()); // { calls: 1, tokens: 1500, usd: 0.0281, bytes: 512, startedAt: 1789035198799 }
-console.log(leash.head());  // a 64-char sha256 — the head of this run's audit chain
+console.log(toolwrit.usage()); // { calls: 1, tokens: 1500, usd: 0.0281, bytes: 512, startedAt: 1789035198799 }
+console.log(toolwrit.head());  // a 64-char sha256 — the head of this run's audit chain
 ```
 
 ---
 
 ## The MCP one-liner
 
-If your agent already talks to an MCP server, you do not need to touch application code at all. Put Leash in front of the server process. Every `tools/call` that crosses the boundary is enforced against your policy.
+If your agent already talks to an MCP server, you do not need to touch application code at all. Put Toolwrit in front of the server process. Every `tools/call` that crosses the boundary is enforced against your policy.
 
 Before, in your MCP client config:
 
@@ -113,9 +115,9 @@ After:
 
 ```json
 {
-  "command": "leash",
+  "command": "toolwrit",
   "args": [
-    "run", "--policy", "./leash.yaml", "--audit", "./audit.jsonl",
+    "run", "--policy", "./toolwrit.yaml", "--audit", "./audit.jsonl",
     "--", "npx", "-y", "@acme/filesystem-mcp", "/srv/workspace"
   ]
 }
@@ -124,7 +126,7 @@ After:
 Or from a shell:
 
 ```
-leash run --policy ./leash.yaml --audit ./audit.jsonl -- npx -y @acme/filesystem-mcp /srv/workspace
+toolwrit run --policy ./toolwrit.yaml --audit ./audit.jsonl -- npx -y @acme/filesystem-mcp /srv/workspace
 ```
 
 A refusal is returned to the agent as an **MCP tool error, not a protocol error**. That distinction matters: a protocol error looks like a broken server and the model retries blindly, while a tool error is content the model reads — it sees the boundary, sees which argument was wrong, and adapts. The stated reason is the same text a human operator gets.
@@ -132,12 +134,12 @@ A refusal is returned to the agent as an **MCP tool error, not a protocol error*
 ### The rest of the CLI
 
 ```
-leash run     --policy <file> [--audit <file>] [--run <id>] -- <command> [args...]
-leash verify  <audit.jsonl> [--against <anchor.jsonl>]
-leash receipt <audit.jsonl> [--json]
-leash anchor  <audit.jsonl> --to <anchor.jsonl>
-leash check   --policy <file> --tool <name> [--args <json>]
-leash explain --policy <file>
+toolwrit run     --policy <file> [--audit <file>] [--run <id>] -- <command> [args...]
+toolwrit verify  <audit.jsonl> [--against <anchor.jsonl>]
+toolwrit receipt <audit.jsonl> [--json]
+toolwrit anchor  <audit.jsonl> --to <anchor.jsonl>
+toolwrit check   --policy <file> --tool <name> [--args <json>]
+toolwrit explain --policy <file>
 ```
 
 | Command | Purpose | Exit codes |
@@ -152,9 +154,9 @@ leash explain --policy <file>
 `check` exists for CI. A policy is a security control, so regressions in it should break the build:
 
 ```
-leash check --policy leash.yaml --tool fs.read  --args '{"path":"/srv/workspace/notes.md"}'   # expect 0
-leash check --policy leash.yaml --tool fs.write --args '{"path":"/etc/passwd"}'               # expect 1
-leash check --policy leash.yaml --tool shell.exec                                             # expect 1
+toolwrit check --policy toolwrit.yaml --tool fs.read  --args '{"path":"/srv/workspace/notes.md"}'   # expect 0
+toolwrit check --policy toolwrit.yaml --tool fs.write --args '{"path":"/etc/passwd"}'               # expect 1
+toolwrit check --policy toolwrit.yaml --tool shell.exec                                             # expect 1
 ```
 
 Assert what your policy must *refuse*, not only what it permits. Allowlists rot in the permissive direction.
@@ -199,7 +201,7 @@ Using the policy above, the agent asks for `fs.read` with `{"path": "/etc/passwd
 }
 ```
 
-Note the shape. When a rule *wanted* this tool but rejected the arguments, Leash reports that near-miss instead of the useless "no rule matched" — so the model is told which argument was wrong and can retry inside the boundary. When nothing targeted the tool at all, you get the blunter version:
+Note the shape. When a rule *wanted* this tool but rejected the arguments, Toolwrit reports that near-miss instead of the useless "no rule matched" — so the model is told which argument was wrong and can retry inside the boundary. When nothing targeted the tool at all, you get the blunter version:
 
 ```json
 {
@@ -216,10 +218,10 @@ Note the shape. When a rule *wanted* this tool but rejected the arguments, Leash
 }
 ```
 
-`LeashDenied.message` is that `reason` prefixed with the tool name:
+`ToolwritDenied.message` is that `reason` prefixed with the tool name:
 
 ```
-leash: fs.read denied — no rule allows "fs.read" with these arguments
+toolwrit: fs.read denied — no rule allows "fs.read" with these arguments
 ```
 
 ---
@@ -245,14 +247,14 @@ The argument for it is worth stating plainly, because it is the whole reason the
 
 A declared envelope does not guess. A render job that asked for an hour and two gigabytes gets exactly that, uninterrupted. The signal stops being "this looks like a lot" and becomes "this run left the envelope its operator approved" — which is a fact, not a hunch. Approve once at the start, hear nothing until a threshold.
 
-**The plan is written into the audit chain as entry 1, before the run can consume anything.** The `Leash` constructor records it; no guarded call can precede it. What was *authorised* is therefore part of the tamper-evident record, not just what happened, and nobody can later claim a different budget was approved than the one the run started under:
+**The plan is written into the audit chain as entry 1, before the run can consume anything.** The `Toolwrit` constructor records it; no guarded call can precede it. What was *authorised* is therefore part of the tamper-evident record, not just what happened, and nobody can later claim a different budget was approved than the one the run started under:
 
 ```json
 {
   "seq": 1,
   "at": 1789178401000,
   "run": "nightly-2026-09-12",
-  "tool": "leash:plan",
+  "tool": "toolwrit:plan",
   "args": {
     "purpose": "nightly CRM export for the EU region",
     "approvedBy": "ergin",
@@ -266,14 +268,14 @@ A declared envelope does not guess. A render job that asked for an hour and two 
 }
 ```
 
-Note the zero usage: the envelope is committed before anything can be spent against it. The defaults Leash will actually use are recorded too (`warnAt: [0.8, 0.95]`, `approvedBy: null` when unset), so the entry is self-describing rather than a document you have to re-derive from the policy file.
+Note the zero usage: the envelope is committed before anything can be spent against it. The defaults Toolwrit will actually use are recorded too (`warnAt: [0.8, 0.95]`, `approvedBy: null` when unset), so the entry is self-describing rather than a document you have to re-derive from the policy file.
 
 ### Warnings
 
 `warnAt` is a list of fractions of the budget. Each threshold fires **at most once per dimension**, across `calls`, `tokens`, `usd`, `bytes` and `seconds` — repetition is what gets an alert muted. A warning is delivered to `onWarn` *and* recorded in the chain, so "nobody told me it was at 95%" is answerable from the log rather than from whether a Slack message happened to get delivered.
 
 ```ts
-const leash = new Leash({
+const toolwrit = new Toolwrit({
   policy: loadPolicyFile('./export.yaml'),
   auditFile: './audit.jsonl',
   // Keep this non-blocking: it runs inline with metering. Queue the post,
@@ -293,7 +295,7 @@ The `BudgetWarning` handed to `onWarn` carries `dimension`, `threshold`, `used`,
   "seq": 6,
   "at": 1789178410000,
   "run": "nightly-2026-09-12",
-  "tool": "leash:warning",
+  "tool": "toolwrit:warning",
   "args": {
     "dimension": "bytes",
     "threshold": 0.8,
@@ -335,7 +337,7 @@ call 2: ok, bytes now 8000000
 call 3: ok, bytes now 12000000
 call 4: ok, bytes now 16000000
 call 5: ok, bytes now 20000000
-call 6: leash: crm.search denied — data budget exhausted: 20000000/20000000 bytes returned by tools
+call 6: toolwrit: crm.search denied — data budget exhausted: 20000000/20000000 bytes returned by tools
 ```
 
 ### The limitation, stated up front
@@ -351,7 +353,7 @@ A second honest limit: **an unserialisable result is under-counted.** Sizes are 
 Two smaller notes:
 
 - Bytes are attributed to the call's own timestamp, not to a fresh clock read, so the ledger does not depend on how long a tool happened to take.
-- Under `leash run`, what is measured is the **whole JSON-RPC response object** the downstream MCP server sent, not just the text inside it. In a measured run a 100-character text result cost 173 bytes. Size the budget against the protocol envelope, not the payload. The proxy also handles requests concurrently, so calls already in flight are not counted until they return.
+- Under `toolwrit run`, what is measured is the **whole JSON-RPC response object** the downstream MCP server sent, not just the text inside it. In a measured run a 100-character text result cost 173 bytes. Size the budget against the protocol envelope, not the payload. The proxy also handles requests concurrently, so calls already in flight are not counted until they return.
 
 ---
 
@@ -442,7 +444,7 @@ Run-scoped. Every field is optional; each must be a positive number. All are che
 | `bytes` | `number` | Hard ceiling on bytes **returned by tools** across the run. Measured after each call, so the breaching call completes and the next is refused — see [The bytes ceiling](#the-bytes-ceiling). |
 | `seconds` | `number` | Wall-clock ceiling, measured from the **first metered event**, not from process start. |
 
-Leash does not count tokens or dollars for you — it cannot see your model calls. `meter()` and `spend()` are how consumption enters the ledger. A `tokens` or `usd` budget with no `meter()` calls is inert; a `seconds` budget only begins once something has been metered or a call has been permitted. `calls` and `bytes` are the two dimensions Leash fills in by itself, from `guard()`.
+Toolwrit does not count tokens or dollars for you — it cannot see your model calls. `meter()` and `spend()` are how consumption enters the ledger. A `tokens` or `usd` budget with no `meter()` calls is inert; a `seconds` budget only begins once something has been metered or a call has been permitted. `calls` and `bytes` are the two dimensions Toolwrit fills in by itself, from `guard()`.
 
 ### RunPlan
 
@@ -451,12 +453,12 @@ Requires a `budget`; a plan with nothing to measure against is a load error.
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `purpose` | `string` | yes | What the run is for, in the operator's words. Must be non-empty. Carried into the audit log and every warning message. |
-| `approvedBy` | `string` | no | Who approved the envelope. **Recorded, never verified by Leash.** Logged as `null` when unset. |
+| `approvedBy` | `string` | no | Who approved the envelope. **Recorded, never verified by Toolwrit.** Logged as `null` when unset. |
 | `warnAt` | `number[]` | no | Fractions of the budget at which the run reports. Each entry must be `> 0` and `<= 1`. Sorted ascending at load. Defaults to `[0.8, 0.95]`. |
 
 ### BudgetWarning
 
-Passed to `onWarn` and recorded as a `leash:warning` audit entry. Fires at most once per threshold per dimension.
+Passed to `onWarn` and recorded as a `toolwrit:warning` audit entry. Fires at most once per threshold per dimension.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -465,10 +467,10 @@ Passed to `onWarn` and recorded as a `leash:warning` audit entry. Fires at most 
 | `used` / `limit` | `number` | Consumption and ceiling for that dimension. |
 | `message` | `string` | Ready-to-send summary. |
 
-### Leash options
+### Toolwrit options
 
 ```ts
-new Leash({
+new Toolwrit({
   policy,                       // Policy — required
   run: 'run-2026-09-10-a',      // string — stamped on audit entries; a UUID when omitted
   auditFile: './audit.jsonl',   // string — append entries here; they are buffered either way
@@ -479,19 +481,19 @@ new Leash({
 });
 ```
 
-`onWarn` runs inline with metering. Keep it non-blocking — queue the notification rather than awaiting it. If the policy has a `plan`, the constructor writes the `leash:plan` entry immediately, so constructing a `Leash` with an `auditFile` always appends entry 1 before you call anything.
+`onWarn` runs inline with metering. Keep it non-blocking — queue the notification rather than awaiting it. If the policy has a `plan`, the constructor writes the `toolwrit:plan` entry immediately, so constructing a `Toolwrit` with an `auditFile` always appends entry 1 before you call anything.
 
 | Method | Returns | Notes |
 | --- | --- | --- |
 | `check(tool, args?)` | `Decision` | Evaluates without recording or executing. For dry runs and operator previews. |
-| `guard(tool, args, execute)` | `Promise<T>` | Evaluate, record, then execute. Throws `LeashDenied` on refusal. |
+| `guard(tool, args, execute)` | `Promise<T>` | Evaluate, record, then execute. Throws `ToolwritDenied` on refusal. |
 | `meter(input, output, price?)` | `void` | Record a model turn. `price` is USD per **1,000** tokens. |
 | `spend(usd)` | `void` | Record non-token spend. |
 | `usage()` | `BudgetUsage` | `{ calls, tokens, usd, bytes, startedAt }`. |
 | `entries()` | `readonly AuditEntry[]` | The chain recorded so far. |
 | `head()` | `string` | Hash of the newest entry — what an anchor commits to. |
 
-`LeashDenied` carries `tool`, `decision` and `auditHash` — the hash of the entry recording the refusal, worth quoting in a support ticket.
+`ToolwritDenied` carries `tool`, `decision` and `auditHash` — the hash of the entry recording the refusal, worth quoting in a support ticket.
 
 The library also exports the pieces directly for embedding: `evaluate`, `loadPolicyFile`, `parsePolicy`, `validatePolicy`, `PolicyError`, `matchesGlob`, `resolvePath`, `Ledger`, `AuditLog`, `canonicalize`, `hashEntry`, `GENESIS`, `verifyChain`, `verifyFile`, `summarize`, `verifyAgainstReceipt`.
 
@@ -524,7 +526,7 @@ A real entry:
 
 `usage` is consumption **at the moment of the decision**, before this call is counted — which is exactly the state the engine saw, so a reviewer can replay the decision from the entry alone. `bytes` lags by one call for the same reason: it is the total *before* this tool has returned anything.
 
-Two entries describe Leash itself rather than a guarded tool call: `leash:plan` (the approved envelope, always entry 1 when a policy declares a plan) and `leash:warning` (a threshold that fired). They share the ordinary entry shape, so one chain and one verifier cover everything.
+Two entries describe Toolwrit itself rather than a guarded tool call: `toolwrit:plan` (the approved envelope, always entry 1 when a policy declares a plan) and `toolwrit:warning` (a threshold that fired). They share the ordinary entry shape, so one chain and one verifier cover everything.
 
 ### How the chain works
 
@@ -533,7 +535,7 @@ Two entries describe Leash itself rather than a guarded tool call: `leash:plan` 
 - Editing, deleting or reordering any past entry invalidates that entry's hash and every link after it.
 
 ```
-leash verify audit.jsonl
+toolwrit verify audit.jsonl
 ```
 
 Exit `0` if the chain is intact, `1` if it is not. `verifyFile` returns the same result programmatically, and it stops at the **first** inconsistency with a specific cause:
@@ -558,7 +560,7 @@ Exit `0` if the chain is intact, `1` if it is not. `verifyFile` returns the same
 Secrets must never reach the log. Pass dotted paths to `redact` and the value is replaced with the literal string `"[redacted]"` before the entry is hashed:
 
 ```ts
-new Leash({ policy, auditFile: './audit.jsonl', redact: ['headers.authorization'] });
+new Toolwrit({ policy, auditFile: './audit.jsonl', redact: ['headers.authorization'] });
 ```
 
 ```json
@@ -568,9 +570,9 @@ new Leash({ policy, auditFile: './audit.jsonl', redact: ['headers.authorization'
 Two properties follow, and both matter:
 
 - The **redacted shape is what gets hashed.** A redaction is therefore part of the committed record, not a later edit — you cannot retroactively redact a logged secret and still pass `verify`, and you cannot forge a redaction to hide what an argument was.
-- Your caller's object is untouched. Leash clones before redacting, so the real argument value is still available to the tool.
+- Your caller's object is untouched. Toolwrit clones before redacting, so the real argument value is still available to the tool.
 
-Redaction is declared per-`Leash`, not per-rule. If a value is sensitive anywhere, redact it everywhere.
+Redaction is declared per-`Toolwrit`, not per-rule. If a value is sensitive anywhere, redact it everywhere.
 
 ---
 
@@ -581,7 +583,7 @@ A hash chain proves what one run did. Nobody reads chains at scale. A fleet of 1
 A receipt is one small summary object per run. The fleet becomes **100,000 receipts instead of 100,000,000 entries**, with the runs that left their approved envelope already flagged in the summary rather than buried in it.
 
 ```
-leash receipt audit.jsonl
+toolwrit receipt audit.jsonl
 ```
 
 ```
@@ -634,14 +636,14 @@ The three fields to sort a fleet by: **`exceeded`** (a call was refused because 
 
 ```ts
 import { readFileSync } from 'node:fs';
-import { summarize } from 'shortleash';
+import { summarize } from 'toolwrit';
 
 const entries = readFileSync('./audit.jsonl', 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
 const receipt = summarize(entries);
 if (receipt.exceeded || receipt.denied > 0) escalate(receipt);
 ```
 
-One accounting detail worth knowing. Each entry records usage **as of the decision**, before the call it authorises is counted, so the last entry's call count always lags by one. `usage.calls` in a receipt is therefore the count of allowed entries, not the last entry's figure — otherwise every receipt would read "9 allowed, 8 calls", which a reviewer notices immediately. Tokens, dollars and bytes still come from the last entry, since metering lands there between calls. Leash's own `leash:plan` and `leash:warning` entries are excluded from `allowed`/`denied`/`asked`.
+One accounting detail worth knowing. Each entry records usage **as of the decision**, before the call it authorises is counted, so the last entry's call count always lags by one. `usage.calls` in a receipt is therefore the count of allowed entries, not the last entry's figure — otherwise every receipt would read "9 allowed, 8 calls", which a reviewer notices immediately. Tokens, dollars and bytes still come from the last entry, since metering lands there between calls. Toolwrit's own `toolwrit:plan` and `toolwrit:warning` entries are excluded from `allowed`/`denied`/`asked`.
 
 ---
 
@@ -652,17 +654,17 @@ Here is the hole that `verify` alone cannot close.
 **Verifying a chain in isolation cannot detect that its tail was cut off.** A prefix of a valid chain is itself a valid chain: every link intact, every hash correct, `seq` running 1..n. An agent that deletes its last twenty entries hands you a log that passes.
 
 ```
-leash verify truncated.jsonl
+toolwrit verify truncated.jsonl
 ok: 6 entries verified
 head: 4cd48e58f9b83f20a143534960983d5d72062507d8c356b35b2292845ce479cd
 ```
 
 Exit `0`. Three calls and both budget warnings are gone, and nothing inside the file says so.
 
-What closes it is a receipt issued at the time, kept somewhere else. `leash anchor` appends one receipt line — including the head — to an append-only file:
+What closes it is a receipt issued at the time, kept somewhere else. `toolwrit anchor` appends one receipt line — including the head — to an append-only file:
 
 ```
-leash anchor audit.jsonl --to anchors.jsonl
+toolwrit anchor audit.jsonl --to anchors.jsonl
 ```
 
 ```
@@ -670,10 +672,10 @@ anchored run nightly-2026-09-12 (head 6a5900e535789622d82e8b78374597e412d95c016f
 note: an anchor only proves anything where the agent cannot rewrite it.
 ```
 
-`leash verify --against` then runs **two** checks and reports them separately, because only the second can catch a truncation and an operator has to see which one failed:
+`toolwrit verify --against` then runs **two** checks and reports them separately, because only the second can catch a truncation and an operator has to see which one failed:
 
 ```
-leash verify audit.jsonl --against anchors.jsonl
+toolwrit verify audit.jsonl --against anchors.jsonl
 ok: chain check — 9 entries verified
 ok: anchor check — head matches the receipt anchored for run nightly-2026-09-12
 head: 6a5900e535789622d82e8b78374597e412d95c016fa408401697fcff01da0ea6
@@ -682,7 +684,7 @@ head: 6a5900e535789622d82e8b78374597e412d95c016fa408401697fcff01da0ea6
 The same command on the truncated log:
 
 ```
-leash verify truncated.jsonl --against anchors.jsonl
+toolwrit verify truncated.jsonl --against anchors.jsonl
 ok: chain check — 6 entries verified
 FAILED: anchor check — log does not match the anchored receipt (6 entries read)
   seq:    6
@@ -701,31 +703,31 @@ Anchoring the same run more than once is normal — mid-run and again at the end
 
 The programmatic form is `verifyAgainstReceipt(entries, receipt)`, which returns the same `VerifyResult` shape as `verifyChain`.
 
-### The part Leash cannot do for you
+### The part Toolwrit cannot do for you
 
-**An anchor is only worth something where the agent cannot rewrite it.** An anchor file sitting next to the audit file, writable by the same process, is not evidence — an attacker who truncates one can truncate the other. Leash cannot enforce where the anchor lives. It can only make putting it there one command:
+**An anchor is only worth something where the agent cannot rewrite it.** An anchor file sitting next to the audit file, writable by the same process, is not evidence — an attacker who truncates one can truncate the other. Toolwrit cannot enforce where the anchor lives. It can only make putting it there one command:
 
 ```
-leash anchor audit.jsonl --to /mnt/worm/anchors.jsonl   # a volume the agent's user can append to and not rewrite
+toolwrit anchor audit.jsonl --to /mnt/worm/anchors.jsonl   # a volume the agent's user can append to and not rewrite
 ```
 
 Another host, an object store with object-lock or append-only retention, a log pipeline under credentials the agent process does not hold, a ticket, a colleague's inbox. Pick by asking who has to be convinced. [`docs/threat-model.md`](docs/threat-model.md) lays out the options in ascending order of effort.
 
 ---
 
-## What Leash is not
+## What Toolwrit is not
 
 Being straight about the boundary is worth more than overclaiming.
 
-- **It does not inspect prompts or model output.** There is no classifier, no jailbreak detector, no content filter. Leash sees tool names and arguments, and nothing else.
-- **It cannot stop an allowed tool from doing something harmful.** If your policy permits `fs.write` under `/srv/workspace/`, Leash will let the agent write nonsense there all day. The policy is the security boundary; Leash only enforces it faithfully.
-- **It is not a network egress filter.** `urlHosts` constrains a *URL-shaped argument you chose to constrain*. A tool that opens its own sockets is invisible to Leash. If you need egress control, you need it at the network layer.
+- **It does not inspect prompts or model output.** There is no classifier, no jailbreak detector, no content filter. Toolwrit sees tool names and arguments, and nothing else.
+- **It cannot stop an allowed tool from doing something harmful.** If your policy permits `fs.write` under `/srv/workspace/`, Toolwrit will let the agent write nonsense there all day. The policy is the security boundary; Toolwrit only enforces it faithfully.
+- **It is not a network egress filter.** `urlHosts` constrains a *URL-shaped argument you chose to constrain*. A tool that opens its own sockets is invisible to Toolwrit. If you need egress control, you need it at the network layer.
 - **It governs the tool boundary only.** Anything a tool does internally, anything the model does without calling a tool, and anything another process on the host does are all outside its remit.
 - **The audit log is tamper-evident, not tamper-proof.** An attacker with write access to the file can rewrite the entire chain consistently, and the result verifies perfectly. Nothing inside a file distinguishes an honest chain from a consistently forged one. Evidence requires that the head hash be anchored somewhere they do not control. See [`docs/threat-model.md`](docs/threat-model.md).
-- **`verify` alone cannot detect truncation.** A prefix of a valid chain is a valid chain. Only `verify --against` an anchored receipt catches a tail that was cut off — and only if the anchor lives somewhere the agent cannot rewrite. Leash cannot enforce that; it can only make putting it there one command.
+- **`verify` alone cannot detect truncation.** A prefix of a valid chain is a valid chain. Only `verify --against` an anchored receipt catches a tail that was cut off — and only if the anchor lives somewhere the agent cannot rewrite. Toolwrit cannot enforce that; it can only make putting it there one command.
 - **A bytes ceiling bounds a run at the limit plus one call, not at the limit.** A result's size is not knowable before the tool runs, so the breaching call completes and the next one is refused. It bounds iteration, not a single oversized response.
 - **Byte measurement under-counts an unserialisable result.** A cyclic object or a throwing `toJSON` falls back to its string form, which is usually much smaller than the data it holds. This fails open, and is documented rather than hidden.
-- **`approvedBy` is recorded, not verified.** A plan's approver is a string Leash writes into the chain. It is evidence of what the policy file claimed, not proof that a particular human agreed.
+- **`approvedBy` is recorded, not verified.** A plan's approver is a string Toolwrit writes into the chain. It is evidence of what the policy file claimed, not proof that a particular human agreed.
 - **A warning is a report, not a control.** Crossing a `warnAt` threshold refuses nothing. The budget does the refusing, at 100%.
 - **The budget is an estimate, not a bill.** `usd` is whatever your `meter()` price table and `spend()` calls say it is.
 
@@ -740,9 +742,9 @@ Describing categories, not products.
 | **Prompt-level guardrails** (system-prompt rules, tool descriptions) | No — the model decides | Yes | No | Yes, directly — it is text in the same channel | No |
 | **LLM-judge guardrails** (a second model approves each call) | No — sampled output | Usually a vendor API | Yes — an extra model call per tool call | Yes — the judge takes a prompt too | Only if the vendor keeps one; not verifiable by you |
 | **API gateways / egress proxies** | Yes, for what they can see | Sometimes; often a hosted hop | Yes — a network round trip | No | Request logs, not decision logs; usually not hash-chained |
-| **Leash** | Yes — a pure function of policy + call + ledger | Yes — in-process or a local sidecar | Negligible — no network, no model | No prompt to jailbreak | Hash-chained JSONL, verifiable offline with one command |
+| **Toolwrit** | Yes — a pure function of policy + call + ledger | Yes — in-process or a local sidecar | Negligible — no network, no model | No prompt to jailbreak | Hash-chained JSONL, verifiable offline with one command |
 
-The wedge is narrow and deliberate: Leash does one layer, deterministically, in your infrastructure, and hands you a file you can prove things with. It complements the other rows rather than replacing them — an LLM judge on top of a deny-by-default allowlist is a reasonable architecture; an LLM judge *instead of* one is not.
+The wedge is narrow and deliberate: Toolwrit does one layer, deterministically, in your infrastructure, and hands you a file you can prove things with. It complements the other rows rather than replacing them — an LLM judge on top of a deny-by-default allowlist is a reasonable architecture; an LLM judge *instead of* one is not.
 
 **One runtime dependency** (`yaml`). Apache-2.0. Node >= 20.
 
@@ -751,8 +753,8 @@ The wedge is narrow and deliberate: Leash does one layer, deterministically, in 
 ## Documentation
 
 - [`docs/policy-reference.md`](docs/policy-reference.md) — exhaustive constraint reference, the `plan` block, and common policies.
-- [`docs/threat-model.md`](docs/threat-model.md) — what Leash defends against, what it does not, and how to anchor the audit chain.
-- [`docs/python.md`](docs/python.md) — the Python package (`shortleash`, imports as `leash`), its API, and the chain-compatibility guarantee.
+- [`docs/threat-model.md`](docs/threat-model.md) — what Toolwrit defends against, what it does not, and how to anchor the audit chain.
+- [`docs/python.md`](docs/python.md) — the Python package (`toolwrit`, imports as `toolwrit`), its API, and the chain-compatibility guarantee.
 
 ## Licence
 

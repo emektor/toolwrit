@@ -1,5 +1,5 @@
 /**
- * Core contracts for Leash.
+ * Core contracts for Toolwrit.
  *
  * Everything in this file is data. The policy engine is a pure function over
  * these shapes: no network, no model calls, no randomness. That is the whole
@@ -19,7 +19,7 @@ export interface ToolCall {
   at: number;
 }
 
-/** What a run is allowed to consume before Leash cuts it off. */
+/** What a run is allowed to consume before Toolwrit cuts it off. */
 export interface BudgetLimits {
   /** Hard ceiling on total tool calls in the run. */
   calls?: number;
@@ -136,7 +136,7 @@ export interface PolicyRule {
 export interface RunPlan {
   /** What this run is for, in the operator's words. Carried into the audit log. */
   purpose: string;
-  /** Who approved the envelope. Recorded, never verified by Leash itself. */
+  /** Who approved the envelope. Recorded, never verified by Toolwrit itself. */
   approvedBy?: string;
   /**
    * Fractions of the budget (0-1) at which the run reports to a human.
@@ -164,7 +164,7 @@ export interface Policy {
   version: '1';
   /** Free-text label carried into audit exports. */
   name?: string;
-  /** Effect when no rule matches. Defaults to "deny" — Leash is deny-by-default. */
+  /** Effect when no rule matches. Defaults to "deny" — Toolwrit is deny-by-default. */
   default?: Effect;
   budget?: BudgetLimits;
   /** The declared, pre-approved envelope for a run. See RunPlan. */

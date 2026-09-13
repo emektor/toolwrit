@@ -1,9 +1,9 @@
-# Leash for Python
+# Toolwrit for Python
 
-The Python port lives in [`leash-py/`](../../leash-py) and is published as **`shortleash`**. It imports as **`leash`**.
+The Python port lives in [`leash-py/`](../../leash-py) and is published to PyPI as **`toolwrit`**, the same name as the npm package.
 
 ```bash
-pip install shortleash          # imports as `leash`
+pip install toolwrit
 ```
 
 Python 3.10 or newer. One runtime dependency (`pyyaml`). Apache-2.0.
@@ -15,25 +15,25 @@ This document covers what is different. The policy language, the decision ladder
 ## 60-second start
 
 ```python
-from leash import Leash, LeashDenied, load_policy_file
+from toolwrit import Toolwrit, ToolwritDenied, load_policy_file
 
-leash = Leash(
-    load_policy_file("./leash.yaml"),
+toolwrit = Toolwrit(
+    load_policy_file("./toolwrit.yaml"),
     audit_file="./audit.jsonl",
 )
 
 try:
-    result = leash.guard("fs.read", {"path": "/srv/workspace/notes.md"}, lambda: read_file())
-except LeashDenied as denied:
+    result = toolwrit.guard("fs.read", {"path": "/srv/workspace/notes.md"}, lambda: read_file())
+except ToolwritDenied as denied:
     # Hand the boundary back to the model so it can adapt.
     result = {"is_error": True, "text": str(denied)}
 
-leash.meter(1200, 300, {"input": 0.003, "output": 0.015})  # USD per 1,000 tokens
-leash.spend(0.02)
+toolwrit.meter(1200, 300, {"input": 0.003, "output": 0.015})  # USD per 1,000 tokens
+toolwrit.spend(0.02)
 
-print(leash.usage())
+print(toolwrit.usage())
 # BudgetUsage(calls=1, tokens=1500, usd=0.0281, bytes=8, started_at=1789035198799)
-print(leash.head())  # a 64-char sha256 — the head of this run's audit chain
+print(toolwrit.head())  # a 64-char sha256 — the head of this run's audit chain
 ```
 
 The policy is the **first positional argument**; everything else is keyword-only.
@@ -42,10 +42,10 @@ The policy is the **first positional argument**; everything else is keyword-only
 
 ## API
 
-### `Leash`
+### `Toolwrit`
 
 ```python
-Leash(
+Toolwrit(
     policy,                       # Policy — required, positional
     *,
     run="run-2026-09-12-a",       # str  — stamped on audit entries; a uuid4 when omitted
@@ -60,7 +60,7 @@ Leash(
 | Method | Returns | Notes |
 | --- | --- | --- |
 | `check(tool, args=None)` | `Decision` | Evaluates without recording or executing. |
-| `guard(tool, args, execute)` | `T` | Synchronous. Evaluate, record, then call `execute()`. Raises `LeashDenied` on refusal. |
+| `guard(tool, args, execute)` | `T` | Synchronous. Evaluate, record, then call `execute()`. Raises `ToolwritDenied` on refusal. |
 | `await guard_async(tool, args, execute)` | `T` | Same, awaiting an async `execute` and an async `on_ask`. Plain functions work unchanged. |
 | `meter(input_tokens, output_tokens, price=None)` | `None` | `price` is a `TokenPrice` or a plain mapping, USD per **1,000** tokens. |
 | `spend(usd)` | `None` | Non-token spend. |
@@ -68,14 +68,14 @@ Leash(
 | `entries()` | `list[AuditEntry]` | The chain recorded so far. |
 | `head()` | `str` | Hash of the newest entry — what an anchor commits to. |
 
-`LeashDenied` carries `.tool`, `.decision` and `.audit_hash`.
+`ToolwritDenied` carries `.tool`, `.decision` and `.audit_hash`.
 
 ### Naming
 
 Methods and module-level functions are `snake_case`; **policy field names stay exactly as they are in the YAML**, which means `camelCase` on the dataclasses. This is not an oversight — the dataclasses are the serialised policy, and renaming a field here would break the chain, since the plan entry commits to `approvedBy` and `warnAt` as written.
 
 ```python
-from leash import RunPlan, BudgetLimits, ArgConstraint
+from toolwrit import RunPlan, BudgetLimits, ArgConstraint
 
 RunPlan(purpose="nightly CRM export", approvedBy="ergin", warnAt=[0.8, 0.95])
 BudgetLimits(calls=200, usd=5.0, bytes=20_000_000, seconds=3600)
@@ -87,8 +87,8 @@ ArgConstraint(startsWith=["/srv/workspace/"], excludes=[".."], maxLength=200)
 ### Exports
 
 ```python
-from leash import (
-    Leash, LeashDenied, ApprovalHandler,
+from toolwrit import (
+    Toolwrit, ToolwritDenied, ApprovalHandler,
     evaluate, load_policy_file, parse_policy, validate_policy, PolicyError,
     matches_glob, matches_any_glob, resolve_path, MISSING,
     Ledger, TokenPrice,
@@ -109,10 +109,10 @@ TypeScript has one `guard`, because `await` is available from any function. Pyth
 
 ```python
 # Ordinary functions, ordinary on_ask.
-rows = leash.guard("crm.search", {"q": "eu"}, lambda: db.query(...))
+rows = toolwrit.guard("crm.search", {"q": "eu"}, lambda: db.query(...))
 
 # An async tool, an async on_ask, or both. Plain functions are accepted here too.
-rows = await leash.guard_async("crm.search", {"q": "eu"}, lambda: client.search("eu"))
+rows = await toolwrit.guard_async("crm.search", {"q": "eu"}, lambda: client.search("eu"))
 ```
 
 `guard_async` awaits whatever it is given: it awaits the result of `execute()` if it is awaitable, and the result of `on_ask` if that is a coroutine. Passing an **async `on_ask` to the synchronous `guard` raises `TypeError` rather than guessing**:
@@ -145,7 +145,7 @@ plan:
 ```
 
 ```python
-leash = Leash(
+toolwrit = Toolwrit(
     load_policy_file("./export.yaml"),
     run="nightly-2026-09-12",
     audit_file="./audit.jsonl",
@@ -156,10 +156,10 @@ leash = Leash(
 ```
 on_warn -> run "nightly-2026-09-12" (nightly CRM export for the EU region) has used 16,000,000/20,000,000 bytes — 80% of the approved envelope
 on_warn -> run "nightly-2026-09-12" (nightly CRM export for the EU region) has used 20,000,000/20,000,000 bytes — 100% of the approved envelope
-call 6: leash: crm.search denied — data budget exhausted: 20000000/20000000 bytes returned by tools
+call 6: toolwrit: crm.search denied — data budget exhausted: 20000000/20000000 bytes returned by tools
 ```
 
-The `leash:plan` entry is written by the constructor, before anything can be guarded, exactly as in TypeScript. Thousands separators and percentage rounding in the message text go through a reimplementation of the ECMAScript number algorithm (`leash._js`) rather than Python's `repr`, so the two produce byte-identical warning strings — which matters, because the message is inside the hashed entry.
+The `toolwrit:plan` entry is written by the constructor, before anything can be guarded, exactly as in TypeScript. Thousands separators and percentage rounding in the message text go through a reimplementation of the ECMAScript number algorithm (`toolwrit._js`) rather than Python's `repr`, so the two produce byte-identical warning strings — which matters, because the message is inside the hashed entry.
 
 Result sizes are measured as: `None` → 0; `str` → its UTF-8 byte length; `bytes`/`bytearray`/`memoryview` → their length; anything else → the UTF-8 byte length of its **canonical** JSON. Sorting keys reorders bytes but adds and removes none, so this equals what TypeScript gets from `JSON.stringify`. A value that cannot be serialised falls back to `str(result)` and is therefore **under-counted** — the same documented fail-open as in TypeScript.
 
@@ -173,27 +173,27 @@ The same ordering limitation applies: a result's size is unknowable before the t
 | --- | --- | --- |
 | Policy engine, constraints, globs, budgets, plans, bytes | yes | yes |
 | Audit chain, redaction, `verify` | yes | yes |
-| `leash check` / `explain` / `verify` | yes | yes |
-| `leash run` (the MCP stdio proxy) | yes | **no** |
+| `toolwrit check` / `explain` / `verify` | yes | yes |
+| `toolwrit run` (the MCP stdio proxy) | yes | **no** |
 | Anthropic / OpenAI SDK adapters | yes | **no** |
 | Run receipts (`summarize`, `verifyAgainstReceipt`) | yes | **no** |
-| `leash receipt` / `leash anchor` / `verify --against` | yes | **no** |
+| `toolwrit receipt` / `toolwrit anchor` / `verify --against` | yes | **no** |
 
-`leash run` exits 1 and says so:
-
-```
-leash: `leash run` (the MCP proxy) is not part of the Python port; use the TypeScript CLI for it
-```
-
-`leash receipt` and `leash anchor` are not subcommands here at all, and exit 1 with the usage text.
-
-`leash verify --against <anchor>` is likewise not implemented in Python, and it **refuses rather than ignoring the flag**:
+`toolwrit run` exits 1 and says so:
 
 ```
-$ leash verify truncated.jsonl --against anchors.jsonl
-leash: `verify --against <anchor>` is not implemented in the Python CLI; the chain
+toolwrit: `toolwrit run` (the MCP proxy) is not part of the Python port; use the TypeScript CLI for it
+```
+
+`toolwrit receipt` and `toolwrit anchor` are not subcommands here at all, and exit 1 with the usage text.
+
+`toolwrit verify --against <anchor>` is likewise not implemented in Python, and it **refuses rather than ignoring the flag**:
+
+```
+$ toolwrit verify truncated.jsonl --against anchors.jsonl
+toolwrit: `verify --against <anchor>` is not implemented in the Python CLI; the chain
 check alone cannot detect a truncated log, so use the TypeScript CLI
-(`leash verify <file> --against <anchor>`) rather than reading this run as a pass
+(`toolwrit verify <file> --against <anchor>`) rather than reading this run as a pass
 $ echo $?
 1
 ```
@@ -205,9 +205,9 @@ Use the TypeScript CLI for receipts and anchoring. It reads chains written by Py
 Because the chains are compatible, none of this blocks you: **run the TypeScript CLI over a Python-written log.** This works and is the recommended path for receipts and anchoring in a Python deployment:
 
 ```
-leash receipt audit.jsonl                        # written by shortleash for Python
-leash anchor  audit.jsonl --to anchors.jsonl
-leash verify  audit.jsonl --against anchors.jsonl
+toolwrit receipt audit.jsonl                        # written by toolwrit for Python
+toolwrit anchor  audit.jsonl --to anchors.jsonl
+toolwrit verify  audit.jsonl --against anchors.jsonl
 ```
 
 ---
@@ -221,14 +221,14 @@ $ node .../leash/dist/cli.js verify audit-py.jsonl     # TypeScript over a Pytho
 ok: 9 entries verified
 head: 6a5900e535789622d82e8b78374597e412d95c016fa408401697fcff01da0ea6
 
-$ leash verify audit.jsonl                            # Python over a TypeScript log
+$ toolwrit verify audit.jsonl                            # Python over a TypeScript log
 ok: 9 entries verified
 head: 6a5900e535789622d82e8b78374597e412d95c016fa408401697fcff01da0ea6
 ```
 
-`leash receipt` and `leash anchor` from the TypeScript package read a Python-written chain without any conversion step, plan and warning entries included.
+`toolwrit receipt` and `toolwrit anchor` from the TypeScript package read a Python-written chain without any conversion step, plan and warning entries included.
 
-The hard part is numbers. JavaScript has one numeric type and prints it with `Number::toString`: `1.0` is `"1"`, `1e21` is `"1e+21"`, `1e16` is `"10000000000000000"`. Python's `repr` keeps the `.0` and switches to exponent notation at a different magnitude. `leash._js` implements the ECMAScript algorithm directly, and the port's `test_audit.py` pins the values one at a time. `tests/test_interop.py` builds the same chain with both implementations and asserts the hashes are equal, which no pair of mutually incompatible serialisers could manage.
+The hard part is numbers. JavaScript has one numeric type and prints it with `Number::toString`: `1.0` is `"1"`, `1e21` is `"1e+21"`, `1e16` is `"10000000000000000"`. Python's `repr` keeps the `.0` and switches to exponent notation at a different magnitude. `toolwrit._js` implements the ECMAScript algorithm directly, and the port's `test_audit.py` pins the values one at a time. `tests/test_interop.py` builds the same chain with both implementations and asserts the hashes are equal, which no pair of mutually incompatible serialisers could manage.
 
 ---
 
@@ -238,7 +238,7 @@ Behaviour is otherwise identical. These are the exceptions, and **none of them l
 
 ### `None` is `null`, not `undefined`
 
-JavaScript has two empty values and `JSON.stringify` treats them differently: `null` is serialised, `undefined` is dropped. Python has one. Since `decision.rule` is legitimately `null` on every default-deny and the TypeScript chain commits to it, `canonicalize` **keeps** `None` as `null` — dropping it would break the chain outright. The "drop me" meaning is carried by an explicit `leash._js.UNDEFINED` sentinel instead.
+JavaScript has two empty values and `JSON.stringify` treats them differently: `null` is serialised, `undefined` is dropped. Python has one. Since `decision.rule` is legitimately `null` on every default-deny and the TypeScript chain commits to it, `canonicalize` **keeps** `None` as `null` — dropping it would break the chain outright. The "drop me" meaning is carried by an explicit `toolwrit._js.UNDEFINED` sentinel instead.
 
 The visible consequence is in constraints: an argument key present but set to `None` counts as **absent**, so it fails a non-`optional` constraint with a `required` violation. TypeScript calls `{"path": None}` a present null and reports a `type` violation instead. Both refuse the call; only the violation name differs.
 
@@ -268,4 +268,4 @@ pip install -e '.[test]'
 python -m pytest
 ```
 
-The cross-language tests need `node` and a built copy of the TypeScript implementation; they look for it at `../leash` or at `$LEASH_TS_ROOT`, and skip when it is absent.
+The cross-language tests need `node` and a built copy of the TypeScript implementation; they look for it at `../leash` or at `$TOOLWRIT_TS_ROOT`, and skip when it is absent.

@@ -1,5 +1,5 @@
 /**
- * Shared fixtures for the Leash test suite.
+ * Shared fixtures for the Toolwrit test suite.
  *
  * Everything here is deterministic on purpose: no `Date.now()`, no timers, no
  * randomness. Every timestamp is an explicit number so a failing assertion can
@@ -81,7 +81,7 @@ export function shape(d: Decision): { effect: string; rule: string | null; const
 
 /** Create a temp directory and register cleanup with the caller's `after` hook. */
 export function tempDir(): { path: string; cleanup: () => void } {
-  const path = mkdtempSync(join(tmpdir(), 'leash-test-'));
+  const path = mkdtempSync(join(tmpdir(), 'toolwrit-test-'));
   return { path, cleanup: () => rmSync(path, { recursive: true, force: true }) };
 }
 

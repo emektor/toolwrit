@@ -1,7 +1,7 @@
 /**
  * Run-scoped consumption tracking.
  *
- * The ledger is the "capacity" half of Leash: rules decide *what* an agent may
+ * The ledger is the "capacity" half of Toolwrit: rules decide *what* an agent may
  * do, the ledger decides *how much*. It is deliberately dumb — a set of
  * counters — because the interesting logic belongs in the engine, and because
  * a counter is trivially auditable.
@@ -32,10 +32,10 @@ export interface TokenPrice {
  */
 function requireConsumption(name: string, value: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new TypeError(`leash: ${name} must be a finite number, got ${JSON.stringify(value)}`);
+    throw new TypeError(`toolwrit: ${name} must be a finite number, got ${JSON.stringify(value)}`);
   }
   if (value < 0) {
-    throw new RangeError(`leash: ${name} must not be negative, got ${value}`);
+    throw new RangeError(`toolwrit: ${name} must not be negative, got ${value}`);
   }
   return value;
 }

@@ -48,7 +48,7 @@ export function matchesAnyGlob(patterns: readonly string[], name: string): boole
 }
 
 /** Sentinel distinguishing "resolved to undefined" from "path does not exist". */
-export const MISSING = Symbol('leash.missing');
+export const MISSING = Symbol('toolwrit.missing');
 
 /**
  * Resolve a dotted path against an argument object.

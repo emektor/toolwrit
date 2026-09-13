@@ -19,7 +19,7 @@ import { GENESIS } from './chain.js';
 import { verifyChain, type VerifyResult } from './verify.js';
 import type { BudgetLimits } from '../types.js';
 
-/** The declared envelope, as it was recorded in the chain's `leash:plan` entry. */
+/** The declared envelope, as it was recorded in the chain's `toolwrit:plan` entry. */
 export interface ReceiptPlan {
   purpose: string;
   approvedBy: string | null;
@@ -27,7 +27,7 @@ export interface ReceiptPlan {
   warnAt: number[];
 }
 
-/** A threshold that fired during the run, recovered from a `leash:warning` entry. */
+/** A threshold that fired during the run, recovered from a `toolwrit:warning` entry. */
 export interface ReceiptWarning {
   dimension: string;
   threshold: number;
@@ -70,9 +70,9 @@ export interface RunReceipt {
   exceeded: boolean;
 }
 
-/** Entries Leash writes about itself rather than about a guarded tool call. */
-const PLAN_TOOL = 'leash:plan';
-const WARNING_TOOL = 'leash:warning';
+/** Entries Toolwrit writes about itself rather than about a guarded tool call. */
+const PLAN_TOOL = 'toolwrit:plan';
+const WARNING_TOOL = 'toolwrit:warning';
 
 /** Summarize a chain. Pure: same entries in, same receipt out. */
 export function summarize(entries: readonly AuditEntry[]): RunReceipt {
@@ -94,7 +94,7 @@ export function summarize(entries: readonly AuditEntry[]): RunReceipt {
       if (warning) warnings.push(warning);
       continue;
     }
-    // Leash's own bookkeeping entries are not tool calls the agent made, so
+    // Toolwrit's own bookkeeping entries are not tool calls the agent made, so
     // counting them as "allowed" would overstate every run by one or two.
     if (entry.tool === PLAN_TOOL) continue;
 

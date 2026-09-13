@@ -3,7 +3,7 @@
  *
  * `evaluate` is pure: same policy + same usage + same history + same call
  * always yields the same Decision. No clock reads, no I/O, no model in the
- * loop. That property is what makes a Leash audit log replayable, and it is
+ * loop. That property is what makes a Toolwrit audit log replayable, and it is
  * the difference between this and a guardrail that asks an LLM for permission.
  *
  * Precedence, in order:

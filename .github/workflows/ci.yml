@@ -1,4 +1,4 @@
-# CI for Leash.
+# CI for Toolwrit.
 #
 # Layout this assumes: a repository whose root holds `leash/` (TypeScript) and
 # `leash-py/` (Python) as siblings. That is how the project is extracted from
@@ -75,17 +75,17 @@ jobs:
           npm pack --pack-destination "$RUNNER_TEMP" --silent
           cd "$RUNNER_TEMP"
           npm init -y >/dev/null
-          npm install --silent ./shortleash-*.tgz
-          ./node_modules/.bin/leash --version
+          npm install --silent ./toolwrit-*.tgz
+          ./node_modules/.bin/toolwrit --version
           node --input-type=module -e "
-            import { Leash, parsePolicy, verifyChain, summarize } from 'shortleash';
-            import { wrapTool } from 'shortleash/sdk';
-            import { createMcpProxy } from 'shortleash/mcp';
+            import { Toolwrit, parsePolicy, verifyChain, summarize } from 'toolwrit';
+            import { wrapTool } from 'toolwrit/sdk';
+            import { createMcpProxy } from 'toolwrit/mcp';
             const policy = parsePolicy('version: \"1\"\ndefault: deny\nrules: []\n');
-            const leash = new Leash({ policy });
-            if (leash.check('anything').effect !== 'deny') throw new Error('deny-by-default broken');
-            if (!verifyChain(leash.entries()).ok) throw new Error('chain broken');
-            if (summarize(leash.entries()).entryCount !== 0) throw new Error('receipt broken');
+            const toolwrit = new Toolwrit({ policy });
+            if (toolwrit.check('anything').effect !== 'deny') throw new Error('deny-by-default broken');
+            if (!verifyChain(toolwrit.entries()).ok) throw new Error('chain broken');
+            if (summarize(toolwrit.entries()).entryCount !== 0) throw new Error('receipt broken');
             if (typeof wrapTool !== 'function') throw new Error('sdk subpath export broken');
             if (typeof createMcpProxy !== 'function') throw new Error('mcp subpath export broken');
             console.log('published entry points OK');
@@ -128,36 +128,36 @@ jobs:
           export PYTHONPATH="$root/leash-py/src"
 
           python - <<'PY'
-          from leash import Leash, LeashDenied, load_policy_file
+          from toolwrit import Toolwrit, ToolwritDenied, load_policy_file
           clock = [1789000000000]
           def now():
               clock[0] += 1000
               return clock[0]
-          leash = Leash(policy=load_policy_file("p.yaml"), run="parity",
-                        audit_file="py.jsonl", now=now)
+          toolwrit = Toolwrit(policy=load_policy_file("p.yaml"), run="parity",
+                                audit_file="py.jsonl", now=now)
           for path in ["/data/a", "/etc/passwd", "/data/b"]:
               try:
-                  leash.guard("fs.read", {"path": path}, lambda: "contents")
-              except LeashDenied:
+                  toolwrit.guard("fs.read", {"path": path}, lambda: "contents")
+              except ToolwritDenied:
                   pass
-          leash.meter(1000, 500, {"input": 0.003, "output": 0.015})
-          print("python head:", leash.head())
+          toolwrit.meter(1000, 500, {"input": 0.003, "output": 0.015})
+          print("python head:", toolwrit.head())
           PY
 
           node --input-type=module -e "
-            const { Leash, LeashDenied, loadPolicyFile } = await import('$root/leash/dist/index.js');
+            const { Toolwrit, ToolwritDenied, loadPolicyFile } = await import('$root/leash/dist/index.js');
             let t = 1789000000000; const now = () => (t += 1000);
-            const leash = new Leash({ policy: loadPolicyFile('p.yaml'), run: 'parity', auditFile: 'ts.jsonl', now });
+            const toolwrit = new Toolwrit({ policy: loadPolicyFile('p.yaml'), run: 'parity', auditFile: 'ts.jsonl', now });
             for (const path of ['/data/a', '/etc/passwd', '/data/b']) {
-              try { await leash.guard('fs.read', { path }, () => 'contents'); }
-              catch (e) { if (!(e instanceof LeashDenied)) throw e; }
+              try { await toolwrit.guard('fs.read', { path }, () => 'contents'); }
+              catch (e) { if (!(e instanceof ToolwritDenied)) throw e; }
             }
-            leash.meter(1000, 500, { input: 0.003, output: 0.015 });
-            console.log('typescript head:', leash.head());
+            toolwrit.meter(1000, 500, { input: 0.003, output: 0.015 });
+            console.log('typescript head:', toolwrit.head());
           "
 
           node "$root/leash/dist/cli.js" verify py.jsonl
-          python -m leash.cli verify ts.jsonl
+          python -m toolwrit.cli verify ts.jsonl
 
           # Equal hashes, not merely two logs that each verify on their own.
           hashes() {

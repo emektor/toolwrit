@@ -1,6 +1,6 @@
-# Contributing to Leash
+# Contributing to Toolwrit
 
-Thanks for looking. Leash is a security control, so the bar for changes is a little higher than for a typical utility library — but the process is short.
+Thanks for looking. Toolwrit is a security control, so the bar for changes is a little higher than for a typical utility library — but the process is short.
 
 ## Build and test
 
@@ -17,9 +17,9 @@ npm run typecheck  # tsc --noEmit
 
 ## The no-dependencies rule
 
-Leash has **one** runtime dependency: `yaml`. Adding a second requires an issue and a strong argument first — not a pull request that already contains it.
+Toolwrit has **one** runtime dependency: `yaml`. Adding a second requires an issue and a strong argument first — not a pull request that already contains it.
 
-The reason is not minimalism for its own sake. Leash is the thing that decides whether an agent may act, and it is installed by people who want a small, auditable amount of code between the model and their systems. Every transitive dependency is code they did not choose and a supply-chain surface they did not agree to.
+The reason is not minimalism for its own sake. Toolwrit is the thing that decides whether an agent may act, and it is installed by people who want a small, auditable amount of code between the model and their systems. Every transitive dependency is code they did not choose and a supply-chain surface they did not agree to.
 
 In practice:
 
@@ -64,7 +64,7 @@ Every code sample, YAML snippet and API name in the docs must be correct against
 
 ## Security issues
 
-Do not open a public issue for a vulnerability — particularly a policy bypass, an argument-constraint escape, or anything that lets a forged audit chain pass `leash verify`. Report it privately to the maintainers and give us a chance to ship a fix first.
+Do not open a public issue for a vulnerability — particularly a policy bypass, an argument-constraint escape, or anything that lets a forged audit chain pass `toolwrit verify`. Report it privately to the maintainers and give us a chance to ship a fix first.
 
 ## Licence
 

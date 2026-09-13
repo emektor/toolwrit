@@ -10,7 +10,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { Leash } from '../src/leash.js';
+import { Toolwrit } from '../src/toolwrit.js';
 import { parsePolicy, PolicyError } from '../src/policy/load.js';
 import { verifyChain } from '../src/audit/verify.js';
 import type { BudgetWarning, Policy } from '../src/types.js';
@@ -25,22 +25,22 @@ function policy(planYaml: string, budgetYaml = 'calls: 10'): Policy {
 
 function collect(p: Policy, opts: { now?: () => number } = {}) {
   const warnings: BudgetWarning[] = [];
-  const leash = new Leash({
+  const toolwrit = new Toolwrit({
     policy: p,
     run: 'test-run',
     now: opts.now ?? (() => T0),
     onWarn: (w) => warnings.push(w),
   });
-  return { leash, warnings };
+  return { toolwrit, warnings };
 }
 
 describe('run plan: the approved envelope is recorded first', () => {
   it('writes the plan as entry 1, before anything can be consumed', () => {
-    const { leash } = collect(policy('  purpose: nightly sync\n  approvedBy: ergin'));
-    const [first] = leash.entries();
+    const { toolwrit } = collect(policy('  purpose: nightly sync\n  approvedBy: ergin'));
+    const [first] = toolwrit.entries();
 
     assert.equal(first?.seq, 1);
-    assert.equal(first?.tool, 'leash:plan');
+    assert.equal(first?.tool, 'toolwrit:plan');
     assert.equal(first?.args['purpose'], 'nightly sync');
     assert.equal(first?.args['approvedBy'], 'ergin');
     assert.deepEqual(first?.args['budget'], { calls: 10 });
@@ -50,27 +50,27 @@ describe('run plan: the approved envelope is recorded first', () => {
   });
 
   it('records the defaults it will actually use, not an empty field', () => {
-    const { leash } = collect(policy('  purpose: p'));
-    assert.deepEqual(leash.entries()[0]?.args['warnAt'], [0.8, 0.95]);
+    const { toolwrit } = collect(policy('  purpose: p'));
+    assert.deepEqual(toolwrit.entries()[0]?.args['warnAt'], [0.8, 0.95]);
   });
 
   it('records approvedBy as null rather than omitting it when unset', () => {
-    const { leash } = collect(policy('  purpose: p'));
-    assert.equal(leash.entries()[0]?.args['approvedBy'], null);
+    const { toolwrit } = collect(policy('  purpose: p'));
+    assert.equal(toolwrit.entries()[0]?.args['approvedBy'], null);
   });
 
   it('writes no plan entry when the policy declares no plan', () => {
     const p = parsePolicy('version: "1"\ndefault: allow\nrules: []\n');
-    const leash = new Leash({ policy: p, now: () => T0 });
-    assert.equal(leash.entries().length, 0);
+    const toolwrit = new Toolwrit({ policy: p, now: () => T0 });
+    assert.equal(toolwrit.entries().length, 0);
   });
 });
 
 describe('run plan: threshold reporting', () => {
   it('fires each threshold exactly once, even as usage keeps climbing', async () => {
-    const { leash, warnings } = collect(policy('  purpose: p\n  warnAt: [0.5, 0.9]'));
+    const { toolwrit, warnings } = collect(policy('  purpose: p\n  warnAt: [0.5, 0.9]'));
 
-    for (let i = 0; i < 10; i++) await leash.guard('t', {}, () => i);
+    for (let i = 0; i < 10; i++) await toolwrit.guard('t', {}, () => i);
 
     const calls = warnings.filter((w) => w.dimension === 'calls');
     assert.deepEqual(calls.map((w) => w.threshold), [0.5, 0.9]);
@@ -79,17 +79,17 @@ describe('run plan: threshold reporting', () => {
   });
 
   it('sorts thresholds so they report in ascending order however they were written', async () => {
-    const { leash, warnings } = collect(policy('  purpose: p\n  warnAt: [0.9, 0.2, 0.5]'));
-    for (let i = 0; i < 10; i++) await leash.guard('t', {}, () => i);
+    const { toolwrit, warnings } = collect(policy('  purpose: p\n  warnAt: [0.9, 0.2, 0.5]'));
+    for (let i = 0; i < 10; i++) await toolwrit.guard('t', {}, () => i);
     assert.deepEqual(warnings.map((w) => w.threshold), [0.2, 0.5, 0.9]);
   });
 
   it('reports each budget dimension independently', () => {
     const p = policy('  purpose: p\n  warnAt: [0.5]', 'calls: 10\n  tokens: 1000\n  usd: 2');
-    const { leash, warnings } = collect(p);
+    const { toolwrit, warnings } = collect(p);
 
-    leash.meter(400, 200);   // 600/1000 tokens
-    leash.spend(1.5);        // 1.5/2 usd
+    toolwrit.meter(400, 200);   // 600/1000 tokens
+    toolwrit.spend(1.5);        // 1.5/2 usd
 
     assert.deepEqual(
       warnings.map((w) => [w.dimension, w.used]),
@@ -100,13 +100,13 @@ describe('run plan: threshold reporting', () => {
   it('measures the time dimension from the first metered event', () => {
     let now = T0;
     const p = policy('  purpose: p\n  warnAt: [0.5]', 'seconds: 100');
-    const { leash, warnings } = collect(p, { now: () => now });
+    const { toolwrit, warnings } = collect(p, { now: () => now });
 
-    leash.spend(0);            // starts the clock, 0s elapsed
+    toolwrit.spend(0);            // starts the clock, 0s elapsed
     assert.equal(warnings.length, 0);
 
     now = T0 + 60_000;         // 60s of a 100s envelope
-    leash.spend(0);
+    toolwrit.spend(0);
     assert.equal(warnings.at(-1)?.dimension, 'seconds');
     assert.equal(warnings.at(-1)?.used, 60);
   });
@@ -114,29 +114,29 @@ describe('run plan: threshold reporting', () => {
   it('stays silent when the policy has a budget but no plan', async () => {
     const p = parsePolicy('version: "1"\ndefault: allow\nbudget:\n  calls: 10\nrules: []\n');
     const warnings: BudgetWarning[] = [];
-    const leash = new Leash({ policy: p, now: () => T0, onWarn: (w) => warnings.push(w) });
+    const toolwrit = new Toolwrit({ policy: p, now: () => T0, onWarn: (w) => warnings.push(w) });
 
-    for (let i = 0; i < 9; i++) await leash.guard('t', {}, () => i);
+    for (let i = 0; i < 9; i++) await toolwrit.guard('t', {}, () => i);
     assert.deepEqual(warnings, []);
   });
 
   it('puts every warning in the chain, and the chain still verifies', async () => {
-    const { leash } = collect(policy('  purpose: p\n  warnAt: [0.5, 0.9]'));
-    for (let i = 0; i < 10; i++) await leash.guard('t', {}, () => i);
+    const { toolwrit } = collect(policy('  purpose: p\n  warnAt: [0.5, 0.9]'));
+    for (let i = 0; i < 10; i++) await toolwrit.guard('t', {}, () => i);
 
-    const warned = leash.entries().filter((e) => e.tool === 'leash:warning');
+    const warned = toolwrit.entries().filter((e) => e.tool === 'toolwrit:warning');
     assert.equal(warned.length, 2);
     assert.equal(warned[0]?.args['dimension'], 'calls');
     // The log answers "was anyone told" without depending on whether a Slack
     // message was actually delivered.
-    assert.equal(verifyChain(leash.entries()).ok, true);
+    assert.equal(verifyChain(toolwrit.entries()).ok, true);
   });
 
   it('does not require an onWarn handler to record the warning', async () => {
     const p = policy('  purpose: p\n  warnAt: [0.5]');
-    const leash = new Leash({ policy: p, run: 'r', now: () => T0 });
-    for (let i = 0; i < 6; i++) await leash.guard('t', {}, () => i);
-    assert.equal(leash.entries().some((e) => e.tool === 'leash:warning'), true);
+    const toolwrit = new Toolwrit({ policy: p, run: 'r', now: () => T0 });
+    for (let i = 0; i < 6; i++) await toolwrit.guard('t', {}, () => i);
+    assert.equal(toolwrit.entries().some((e) => e.tool === 'toolwrit:warning'), true);
   });
 });
 

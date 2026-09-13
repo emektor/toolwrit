@@ -1,7 +1,7 @@
 /**
  * The runtime object an application holds.
  *
- * Leash ties together the three pieces that have to agree with each other:
+ * Toolwrit ties together the three pieces that have to agree with each other:
  * the policy engine (may this happen), the ledger (is there capacity left) and
  * the audit chain (what actually happened). Keeping them behind one object is
  * what stops an integration from recording a decision it did not enforce.
@@ -14,15 +14,15 @@ import { evaluate } from './policy/engine.js';
 import type { BudgetWarning, Decision, Policy, ToolCall } from './types.js';
 
 /** Thrown when a guarded call is refused. Catch this to feed the agent an error. */
-export class LeashDenied extends Error {
+export class ToolwritDenied extends Error {
   constructor(
     readonly tool: string,
     readonly decision: Decision,
     /** Hash of the audit entry recording the refusal. Quote it in support tickets. */
     readonly auditHash: string
   ) {
-    super(`leash: ${tool} denied — ${decision.reason}`);
-    this.name = 'LeashDenied';
+    super(`toolwrit: ${tool} denied — ${decision.reason}`);
+    this.name = 'ToolwritDenied';
   }
 }
 
@@ -33,7 +33,7 @@ export class LeashDenied extends Error {
  */
 export type ApprovalHandler = (call: ToolCall, decision: Decision) => boolean | Promise<boolean>;
 
-export interface LeashOptions {
+export interface ToolwritOptions {
   policy: Policy;
   /** Run identifier stamped on audit entries. Generated when omitted. */
   run?: string;
@@ -85,7 +85,7 @@ function format(value: number): string {
   return Number.isInteger(value) ? value.toLocaleString('en-US') : value.toFixed(2);
 }
 
-export class Leash {
+export class Toolwrit {
   readonly run: string;
   private readonly ledger = new Ledger();
   private readonly audit: AuditLog;
@@ -111,7 +111,7 @@ export class Leash {
     return result;
   }
 
-  constructor(private readonly options: LeashOptions) {
+  constructor(private readonly options: ToolwritOptions) {
     this.run = options.run ?? randomUUID();
     this.now = options.now ?? Date.now;
     this.audit = new AuditLog({
@@ -127,7 +127,7 @@ export class Leash {
     if (options.policy.plan) {
       const plan = options.policy.plan;
       this.audit.record(
-        this.toCall('leash:plan', {
+        this.toCall('toolwrit:plan', {
           purpose: plan.purpose,
           approvedBy: plan.approvedBy ?? null,
           budget: options.policy.budget ?? null,
@@ -156,7 +156,7 @@ export class Leash {
    *
    * The decision is written to the audit chain before `execute` is invoked, so
    * a crash inside the tool still leaves evidence that the call was authorised.
-   * A refusal throws LeashDenied rather than returning a sentinel, because a
+   * A refusal throws ToolwritDenied rather than returning a sentinel, because a
    * silently-skipped side effect is the worst possible failure mode here.
    */
   async guard<T>(
@@ -190,7 +190,7 @@ export class Leash {
     });
 
     if (decision.effect !== 'allow') {
-      throw new LeashDenied(tool, decision, entry.hash);
+      throw new ToolwritDenied(tool, decision, entry.hash);
     }
 
     const result = await execute();
@@ -260,7 +260,7 @@ export class Leash {
         };
 
         this.audit.record(
-          this.toCall('leash:warning', { ...warning }),
+          this.toCall('toolwrit:warning', { ...warning }),
           { effect: 'allow', rule: 'plan', reason: warning.message, violations: [] },
           { calls: usage.calls, tokens: usage.tokens, usd: usage.usd, bytes: usage.bytes }
         );

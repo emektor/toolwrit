@@ -12,19 +12,19 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { Leash, loadPolicyFile, verifyFile } from '../dist/index.js';
+import { Toolwrit, loadPolicyFile, verifyFile } from '../dist/index.js';
 import { guardOpenAIToolCall, meterOpenAIUsage } from '../dist/adapters/sdk.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const auditFile = join(here, '.leash', 'support-agent.audit.jsonl');
+const auditFile = join(here, '.toolwrit', 'support-agent.audit.jsonl');
 
 rmSync(auditFile, { force: true });
-mkdirSync(join(here, '.leash'), { recursive: true });
+mkdirSync(join(here, '.toolwrit'), { recursive: true });
 
 /** Approvals seen by the operator, so the example can show what was escalated. */
 const approvals = [];
 
-const leash = new Leash({
+const toolwrit = new Toolwrit({
   policy: loadPolicyFile(join(here, 'support-agent.policy.yaml')),
   auditFile,
   run: 'example-support-agent',
@@ -33,7 +33,7 @@ const leash = new Leash({
    * The `ask` handler. This example auto-approves so it can run unattended; a
    * real integration posts the call to Slack, opens a task in the queue, or
    * blocks on a terminal prompt, and returns the human's answer. Whatever it
-   * does, returning false (or having no handler at all) denies — Leash never
+   * does, returning false (or having no handler at all) denies — Toolwrit never
    * upgrades an unanswered question into permission.
    */
   onAsk: (call, decision) => {
@@ -62,8 +62,8 @@ const turns = [
   ['reach for a tool nobody granted', 'crm.delete_customer', { id: 'cus_8812' }],
 ];
 
-console.log(`\n  Leash — customer-support agent example`);
-console.log(`  policy: support-agent.policy.yaml    run: ${leash.run}\n`);
+console.log(`\n  Toolwrit — customer-support agent example`);
+console.log(`  policy: support-agent.policy.yaml    run: ${toolwrit.run}\n`);
 
 let allowed = 0;
 let refused = 0;
@@ -77,11 +77,11 @@ for (const [index, [label, name, args]] of turns.entries()) {
     function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) },
   };
 
-  const message = await guardOpenAIToolCall(leash, toolCall, handlers);
+  const message = await guardOpenAIToolCall(toolwrit, toolCall, handlers);
 
   // The OpenAI tool message has no error flag, so read the verdict off the
   // audit chain instead of pattern-matching the text we just produced.
-  const effect = leash.entries().at(-1).decision.effect;
+  const effect = toolwrit.entries().at(-1).decision.effect;
   if (effect === 'allow') allowed++;
   else refused++;
 
@@ -90,14 +90,14 @@ for (const [index, [label, name, args]] of turns.entries()) {
   for (const line of message.content.split('\n')) console.log(`         ${line}`);
   console.log();
 
-  meterOpenAIUsage(leash, { prompt_tokens: 900, completion_tokens: 140 }, { input: 0.0005, output: 0.0015 });
+  meterOpenAIUsage(toolwrit, { prompt_tokens: 900, completion_tokens: 140 }, { input: 0.0005, output: 0.0015 });
 }
 
-const usage = leash.usage();
+const usage = toolwrit.usage();
 const verified = verifyFile(auditFile);
 
 console.log(`  ${allowed} allowed, ${refused} refused`);
 console.log(`  escalated to a human: ${approvals.length ? approvals.map((a) => `${a.tool} $${a.amount} (${a.rule})`).join(', ') : 'none'}`);
 console.log(`  budget: ${usage.calls} calls  ${usage.tokens.toLocaleString('en-US')} tokens  $${usage.usd.toFixed(4)}`);
 console.log(`  audit:  ${auditFile}`);
-console.log(`          ${verified.count} entries, chain ${verified.ok ? 'intact' : 'BROKEN'}, head ${leash.head().slice(0, 16)}\n`);
+console.log(`          ${verified.count} entries, chain ${verified.ok ? 'intact' : 'BROKEN'}, head ${toolwrit.head().slice(0, 16)}\n`);

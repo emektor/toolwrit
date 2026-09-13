@@ -1,11 +1,11 @@
 /**
- * Leash — a deterministic leash for AI agents.
+ * Toolwrit — a written authority for AI agents.
  *
  * Allowlist the tools, cap the budget, prove what happened.
  */
 
-export { Leash, LeashDenied } from './leash.js';
-export type { ApprovalHandler, LeashOptions } from './leash.js';
+export { Toolwrit, ToolwritDenied } from './toolwrit.js';
+export type { ApprovalHandler, ToolwritOptions } from './toolwrit.js';
 
 export {
   wrapTool,

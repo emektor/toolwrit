@@ -1,7 +1,7 @@
 /**
  * The tamper-evident audit chain.
  *
- * This is the half of Leash an auditor actually reads. The tests below prove
+ * This is the half of Toolwrit an auditor actually reads. The tests below prove
  * two things: that the canonical form is stable (so a log written by one
  * process verifies in another), and that every realistic edit to a written log
  * is detected, with the right entry and the right reason named.

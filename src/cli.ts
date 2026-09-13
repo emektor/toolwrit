@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * The `leash` binary.
+ * The `toolwrit` binary.
  *
  * The adoption story for a policy tool is "can I put it in front of what I
- * already run, without editing anything?". `leash run --policy p.yaml -- <cmd>`
+ * already run, without editing anything?". `toolwrit run --policy p.yaml -- <cmd>`
  * is that story: a prefix on an existing MCP server command. The other
  * subcommands exist so a policy can be reviewed (`explain`), tested in CI
  * (`check`) and defended afterwards (`verify`, `receipt`, `anchor`) without
@@ -21,34 +21,34 @@ import { createMcpProxy } from './adapters/mcp-proxy.js';
 import type { AuditEntry } from './audit/chain.js';
 import { summarize, verifyAgainstReceipt, type RunReceipt } from './audit/receipt.js';
 import { verifyChain, verifyFile, type VerifyResult } from './audit/verify.js';
-import { Leash } from './leash.js';
+import { Toolwrit } from './toolwrit.js';
 import { loadPolicyFile } from './policy/load.js';
 import type { ArgConstraint, Decision, Policy } from './types.js';
 
-const USAGE = `leash — a deterministic leash for AI agents.
+const USAGE = `toolwrit — a written authority for AI agents.
 
 Usage:
-  leash run     --policy <file> [--audit <file>] [--run <id>] -- <command> [args...]
-  leash verify  <audit.jsonl> [--against <anchor.jsonl>]
-  leash receipt <audit.jsonl> [--json]
-  leash anchor  <audit.jsonl> --to <anchor.jsonl>
-  leash check   --policy <file> --tool <name> [--args <json>]
-  leash explain --policy <file>
+  toolwrit run     --policy <file> [--audit <file>] [--run <id>] -- <command> [args...]
+  toolwrit verify  <audit.jsonl> [--against <anchor.jsonl>]
+  toolwrit receipt <audit.jsonl> [--json]
+  toolwrit anchor  <audit.jsonl> --to <anchor.jsonl>
+  toolwrit check   --policy <file> --tool <name> [--args <json>]
+  toolwrit explain --policy <file>
 
 Options:
   --help       Show this text.
-  --version    Print the leash version.
+  --version    Print the toolwrit version.
   --against    Check the log's head against the receipt anchored for this run.
   --json       Print the receipt as one JSON object instead of prose.
   --to         Anchor file to append the receipt to.
 
 Anchoring:
   A chain verifies against itself, so a truncated log still passes: a prefix of
-  a valid chain is a valid chain. "leash anchor" writes one receipt line —
-  including the head — to an append-only file, and "leash verify --against"
+  a valid chain is a valid chain. "toolwrit anchor" writes one receipt line —
+  including the head — to an append-only file, and "toolwrit verify --against"
   checks the log still reaches that head. The anchor is only worth anything
   somewhere the agent cannot reach it (another host, an object store with
-  append-only retention, a colleague's inbox). Leash cannot enforce that; it
+  append-only retention, a colleague's inbox). Toolwrit cannot enforce that; it
   can only make putting it there one command.
 
 Exit codes:
@@ -95,7 +95,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       }
       // Only value-taking flags swallow the next token. Without this a
       // boolean flag written before a positional eats it, so
-      // `leash receipt --json audit.jsonl` would lose the filename.
+      // `toolwrit receipt --json audit.jsonl` would lose the filename.
       const next = argv[i + 1];
       if (!BOOLEAN_FLAGS.has(body) && next !== undefined && !next.startsWith('--')) {
         flags.set(body, next);
@@ -150,24 +150,24 @@ async function cmdRun(parsed: ParsedArgs): Promise<void> {
   const policyFile = requireFlag(parsed, 'policy');
   const [command, ...args] = parsed.rest;
   if (!command) {
-    throw new CliError('run needs a downstream command after `--`, e.g. `leash run --policy p.yaml -- npx my-server`');
+    throw new CliError('run needs a downstream command after `--`, e.g. `toolwrit run --policy p.yaml -- npx my-server`');
   }
 
   const policy = loadPolicy(policyFile);
   const auditFile = parsed.flags.get('audit');
   const run = parsed.flags.get('run');
 
-  const leash = new Leash({
+  const toolwrit = new Toolwrit({
     policy,
     ...(auditFile ? { auditFile } : {}),
     ...(run ? { run } : {}),
   });
 
-  const proxy = createMcpProxy({ leash, command, args, policy });
+  const proxy = createMcpProxy({ toolwrit, command, args, policy });
 
   // Diagnostics go to stderr only: stdout is the client's protocol channel.
   process.stderr.write(
-    `leash: guarding "${[command, ...args].join(' ')}" with ${policyFile} (run ${leash.run})\n`
+    `toolwrit: guarding "${[command, ...args].join(' ')}" with ${policyFile} (run ${toolwrit.run})\n`
   );
 
   const shutdown = () => {
@@ -188,7 +188,7 @@ async function cmdRun(parsed: ParsedArgs): Promise<void> {
 
 function cmdVerify(parsed: ParsedArgs): void {
   const file = parsed.positional[1];
-  if (!file) throw new CliError('verify needs an audit file, e.g. `leash verify audit.jsonl`');
+  if (!file) throw new CliError('verify needs an audit file, e.g. `toolwrit verify audit.jsonl`');
 
   const anchorFile = parsed.flags.get('against');
   if (anchorFile === undefined || anchorFile === 'true') {
@@ -259,7 +259,7 @@ function reportFailure(headline: string, result: VerifyResult): void {
 
 function cmdReceipt(parsed: ParsedArgs): void {
   const file = parsed.positional[1];
-  if (!file) throw new CliError('receipt needs an audit file, e.g. `leash receipt audit.jsonl`');
+  if (!file) throw new CliError('receipt needs an audit file, e.g. `toolwrit receipt audit.jsonl`');
 
   const receipt = summarize(readEntries(file));
   if (parsed.flags.get('json') !== undefined) {
@@ -275,7 +275,7 @@ function cmdReceipt(parsed: ParsedArgs): void {
 
 function cmdAnchor(parsed: ParsedArgs): void {
   const file = parsed.positional[1];
-  if (!file) throw new CliError('anchor needs an audit file, e.g. `leash anchor audit.jsonl --to anchors.jsonl`');
+  if (!file) throw new CliError('anchor needs an audit file, e.g. `toolwrit anchor audit.jsonl --to anchors.jsonl`');
   const target = requireFlag(parsed, 'to');
 
   const receipt = summarize(readEntries(file));
@@ -404,7 +404,7 @@ function cmdCheck(parsed: ParsedArgs): void {
   }
 
   // No audit file and no execution: `check` is a dry run, safe to put in CI.
-  const decision = new Leash({ policy }).check(tool, args);
+  const decision = new Toolwrit({ policy }).check(tool, args);
   printDecision(tool, decision);
 
   process.exitCode = decision.effect === 'allow' ? 0 : decision.effect === 'deny' ? 1 : 2;
@@ -518,6 +518,6 @@ try {
 /** Every user-facing failure exits 1 with one line — never a raw stack trace. */
 function fail(err: unknown): void {
   const message = err instanceof CliError ? err.message : `${(err as Error).message ?? String(err)}`;
-  process.stderr.write(`leash: ${message}\n`);
+  process.stderr.write(`toolwrit: ${message}\n`);
   process.exitCode = 1;
 }

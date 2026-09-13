@@ -1,21 +1,21 @@
 {
-  "name": "shortleash",
+  "name": "toolwrit",
   "version": "0.1.0",
-  "description": "A deterministic leash for AI agents. Allowlist the tools, cap the budget, prove what happened.",
+  "description": "A written authority for AI agents. Allowlist the tools, cap the budget, prove what happened.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/emektor/shortleash.git"
+    "url": "git+https://github.com/emektor/toolwrit.git"
   },
-  "homepage": "https://github.com/emektor/shortleash#readme",
+  "homepage": "https://github.com/emektor/toolwrit#readme",
   "bugs": {
-    "url": "https://github.com/emektor/shortleash/issues"
+    "url": "https://github.com/emektor/toolwrit/issues"
   },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "leash": "./dist/cli.js"
+    "toolwrit": "./dist/cli.js"
   },
   "exports": {
     ".": "./dist/index.js",

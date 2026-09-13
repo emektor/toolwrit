@@ -1,6 +1,6 @@
 # Policy reference
 
-A Leash policy is a YAML or JSON document. It is loaded with `loadPolicyFile(path)`, or handed to the CLI with `--policy`. Validation is strict: unknown keys are a hard error, because a silently ignored `startWith` would turn a scoped filesystem rule into an unscoped one.
+A Toolwrit policy is a YAML or JSON document. It is loaded with `loadPolicyFile(path)`, or handed to the CLI with `--policy`. Validation is strict: unknown keys are a hard error, because a silently ignored `startWith` would turn a scoped filesystem rule into an unscoped one.
 
 Everything here is checked against the engine's actual behaviour. Where the implementation is subtler than it looks, this document says so.
 
@@ -393,7 +393,7 @@ call 2: ok, bytes now 8000000
 call 3: ok, bytes now 12000000
 call 4: ok, bytes now 16000000
 call 5: ok, bytes now 20000000
-call 6: leash: crm.search denied — data budget exhausted: 20000000/20000000 bytes returned by tools
+call 6: toolwrit: crm.search denied — data budget exhausted: 20000000/20000000 bytes returned by tools
 ```
 
 ```json
@@ -424,13 +424,13 @@ That last row is the honest limitation. A cyclic object, or a class whose `toJSO
 
 Measurement is deterministic: the same result always measures the same, so a replayed audit log reaches the same verdict.
 
-Two more notes. Bytes are attributed to the call's own timestamp, not a fresh clock read, so the ledger does not depend on how long a tool took. And under `leash run`, the measured value is the **whole JSON-RPC response object** from the downstream MCP server, not just the text inside it — in a measured run a 100-character text result cost 173 bytes.
+Two more notes. Bytes are attributed to the call's own timestamp, not a fresh clock read, so the ledger does not depend on how long a tool took. And under `toolwrit run`, the measured value is the **whole JSON-RPC response object** from the downstream MCP server, not just the text inside it — in a measured run a 100-character text result cost 173 bytes.
 
-Leash cannot see your model calls, so nothing enters the ledger by itself:
+Toolwrit cannot see your model calls, so nothing enters the ledger by itself:
 
 ```ts
-leash.meter(inputTokens, outputTokens, { input: 0.003, output: 0.015 }); // USD per 1,000 tokens
-leash.spend(0.02); // a metered third-party API call
+toolwrit.meter(inputTokens, outputTokens, { input: 0.003, output: 0.015 }); // USD per 1,000 tokens
+toolwrit.spend(0.02); // a metered third-party API call
 ```
 
 `price` is per **1,000** tokens, and defaults to `{ input: 0, output: 0 }` — calling `meter()` without a price table counts tokens but never accrues dollars. A `usd` budget with no priced `meter()` and no `spend()` is inert.
@@ -463,7 +463,7 @@ The case for it: **a global threshold has to guess at every job at once.** "More
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `purpose` | `string` | yes | What the run is for, in the operator's words. Must be non-empty after trimming. Carried into the audit log and into every warning message. |
-| `approvedBy` | `string` | no | Who approved the envelope. **Recorded, never verified by Leash.** Written to the chain as `null` when unset. |
+| `approvedBy` | `string` | no | Who approved the envelope. **Recorded, never verified by Toolwrit.** Written to the chain as `null` when unset. |
 | `warnAt` | `number[]` | no | Fractions of the budget at which the run reports. Non-empty; each entry `> 0` and `<= 1`. Sorted ascending at load. Defaults to `[0.8, 0.95]`. |
 
 ### Load-time rules
@@ -478,14 +478,14 @@ The first one is the one people trip over, and it is deliberate: a plan with not
 
 ### The plan is entry 1 of the audit chain
 
-The `Leash` constructor records the plan **before any call can be guarded**, so what was *authorised* is part of the tamper-evident record and not just what happened. No operator can later claim a different budget was approved than the one the run started under.
+The `Toolwrit` constructor records the plan **before any call can be guarded**, so what was *authorised* is part of the tamper-evident record and not just what happened. No operator can later claim a different budget was approved than the one the run started under.
 
 ```json
 {
   "seq": 1,
   "at": 1789178401000,
   "run": "nightly-2026-09-12",
-  "tool": "leash:plan",
+  "tool": "toolwrit:plan",
   "args": {
     "purpose": "nightly CRM export for the EU region",
     "approvedBy": "ergin",
@@ -499,14 +499,14 @@ The `Leash` constructor records the plan **before any call can be guarded**, so 
 }
 ```
 
-The zero `usage` is the point: the envelope is committed before anything can be spent against it. The entry records the values Leash will actually use, not the literal YAML — so `warnAt` appears as `[0.8, 0.95]` even when the policy omitted it, and `approvedBy` appears as `null` rather than being dropped. The entry is self-describing; a reviewer does not need the policy file to read it.
+The zero `usage` is the point: the envelope is committed before anything can be spent against it. The entry records the values Toolwrit will actually use, not the literal YAML — so `warnAt` appears as `[0.8, 0.95]` even when the policy omitted it, and `approvedBy` appears as `null` rather than being dropped. The entry is self-describing; a reviewer does not need the policy file to read it.
 
 ### Warnings
 
 Each `warnAt` threshold fires **at most once per dimension**, across `calls`, `tokens`, `usd`, `bytes` and `seconds`. Repetition is exactly what gets an alert muted. Thresholds are evaluated after every permitted `guard()`, `meter()` and `spend()` — never on a denial.
 
 ```ts
-const leash = new Leash({
+const toolwrit = new Toolwrit({
   policy: loadPolicyFile('./export.yaml'),
   auditFile: './audit.jsonl',
   onWarn: (w) => queueSlackPost(w.message), // runs inline with metering: do not await
@@ -534,7 +534,7 @@ Every warning is **also** written to the chain, so "nobody told me it was at 95%
   "seq": 6,
   "at": 1789178410000,
   "run": "nightly-2026-09-12",
-  "tool": "leash:warning",
+  "tool": "toolwrit:warning",
   "args": {
     "dimension": "bytes",
     "threshold": 0.8,
@@ -571,7 +571,7 @@ run "nightly-2026-09-12" (nightly CRM export for the EU region) has used 20,000,
 ```
 
 ```ts
-const leash = new Leash({
+const toolwrit = new Toolwrit({
   policy,
   onAsk: async (call, decision) => confirmWithOperator(call.tool, call.args, decision.reason),
 });
@@ -582,7 +582,7 @@ The handler receives the `ToolCall` and the `Decision`, and returns (or resolves
 **Without an `onAsk` handler, `ask` denies.** An unattended run must never silently upgrade itself to allowed:
 
 ```
-leash: billing.refund denied — Refunds over $100 need a human (no approval handler configured)
+toolwrit: billing.refund denied — Refunds over $100 need a human (no approval handler configured)
 ```
 
 ```json
@@ -593,7 +593,7 @@ leash: billing.refund denied — Refunds over $100 need a human (no approval han
 A refusal from the handler reads:
 
 ```
-leash: billing.refund denied — Refunds over $100 need a human (approval refused)
+toolwrit: billing.refund denied — Refunds over $100 need a human (approval refused)
 ```
 
 An approval turns the decision into an allow with `(approved)` appended to the reason, and the audit entry records the allow — so the chain shows the human's decision, not just the policy's.
@@ -805,7 +805,7 @@ rules:
 ```
 
 ```ts
-const leash = new Leash({
+const toolwrit = new Toolwrit({
   policy: loadPolicyFile('./support.yaml'),
   auditFile: `./audit/${runId}.jsonl`,
   redact: ['api_key', 'headers.authorization'],
@@ -880,31 +880,31 @@ rules:
 
 ```ts
 // After every model turn — this is what makes the usd budget real.
-leash.meter(usage.input_tokens, usage.output_tokens, { input: 0.003, output: 0.015 });
+toolwrit.meter(usage.input_tokens, usage.output_tokens, { input: 0.003, output: 0.015 });
 // Metered third-party APIs.
-leash.spend(0.01);
+toolwrit.spend(0.01);
 ```
 
 A research agent is the case where a plan earns its keep. Two hundred megabytes of fetched pages is alarming for a support ticket and unremarkable for a literature review; no single global threshold can be right for both. The envelope is declared per job, approved once, and the three `warnAt` fractions turn a two-hour unattended run into three lines of progress instead of either silence or a stream of noise.
 
 The cap only binds if you call `meter()`. Wire it into the same place you already read token usage from your model response, and the 301st dollar becomes impossible rather than merely unlikely.
 
-`no-internal` is a *best-effort* SSRF backstop, not an egress control. It inspects a URL-shaped argument; a tool that follows a redirect, resolves a hostname to a private address, or opens its own socket is outside Leash's view. Real SSRF defence lives in the network layer. See [`threat-model.md`](threat-model.md).
+`no-internal` is a *best-effort* SSRF backstop, not an egress control. It inspects a URL-shaped argument; a tool that follows a redirect, resolves a hostname to a private address, or opens its own socket is outside Toolwrit's view. Real SSRF defence lives in the network layer. See [`threat-model.md`](threat-model.md).
 
 ---
 
 ## Testing a policy in CI
 
-`leash check` evaluates one hypothetical call and exits `0` for allow, `1` for deny, `2` for ask. Assert both directions:
+`toolwrit check` evaluates one hypothetical call and exits `0` for allow, `1` for deny, `2` for ask. Assert both directions:
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-P=./leash.yaml
+P=./toolwrit.yaml
 
 expect() {  # expect <exit-code> <description> -- <args...>
   local want=$1 desc=$2; shift 3
-  local got=0; leash check --policy "$P" "$@" >/dev/null 2>&1 || got=$?
+  local got=0; toolwrit check --policy "$P" "$@" >/dev/null 2>&1 || got=$?
   [[ "$got" == "$want" ]] || { echo "FAIL: $desc (exit $got, wanted $want)"; exit 1; }
 }
 
@@ -919,7 +919,7 @@ echo "policy ok"
 
 Weight the suite toward refusals. Allowlists rot in the permissive direction — nobody files a bug because the agent was allowed to do something.
 
-`leash explain --policy leash.yaml` prints a human-readable summary of the same document, which is the artefact to paste into a change review when the policy is edited.
+`toolwrit explain --policy toolwrit.yaml` prints a human-readable summary of the same document, which is the artefact to paste into a change review when the policy is edited.
 
 ---
 

@@ -1,4 +1,4 @@
-# Leash examples
+# Toolwrit examples
 
 Both examples are self-contained: no API key, no network, no model. The model
 turns are hardcoded tool calls in the exact shape the Anthropic and OpenAI SDKs
@@ -42,4 +42,4 @@ Shows `guardOpenAIToolCall` (OpenAI tool call in, `role: "tool"` message out),
 integration prompts a human or posts to Slack), and what happens when the model
 emits malformed JSON arguments.
 
-Both runs write a verifiable JSONL audit chain under `examples/.leash/`.
+Both runs write a verifiable JSONL audit chain under `examples/.toolwrit/`.

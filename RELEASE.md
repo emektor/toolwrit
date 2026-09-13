@@ -1,4 +1,4 @@
-# Releasing Leash
+# Releasing Toolwrit
 
 Everything here has been rehearsed except the four steps that need an account
 someone owns. Those are marked **[you]**; the rest is already done or is a
@@ -10,15 +10,19 @@ The project is two packages that share one hash chain, so they are released
 together from one repository:
 
 ```
-shortleash/                 <- repository root
+toolwrit/                 <- repository root
 ├── .github/workflows/ci.yml
-├── leash/                  <- TypeScript package, published to npm as `shortleash`
-└── leash-py/               <- Python package, published to PyPI as `shortleash`
+├── leash/                  <- TypeScript package, published to npm as `toolwrit`
+└── leash-py/               <- Python package, published to PyPI as `toolwrit`
 ```
 
-Both publish under the name `shortleash`; both install a CLI called `leash`.
-The npm name `leash` is taken by an abandoned 2016 package, but a `bin` name is
-not globally reserved, so the command is `leash` on both sides.
+Both publish under the name `toolwrit`; both install a CLI called `toolwrit`.
+The package name and the command are the same word on both sides — there is no
+need for the shorter-name-plus-different-binary split the project used before.
+
+**[you]** confirm `toolwrit` is free on npm and on PyPI immediately before
+publishing. It was chosen because it is not taken and does not collide with
+anything in this category, but neither registry reserves a name until you push.
 
 ## Extracting from the parent repository
 
@@ -26,7 +30,7 @@ The code currently lives inside another repository. To lift it out with its
 history:
 
 ```sh
-# 1. [you] create an empty github.com/emektor/shortleash (no README, no licence)
+# 1. [you] create an empty github.com/emektor/toolwrit (no README, no licence)
 
 # 2. build the standalone tree
 git clone <parent-repo> /tmp/extract && cd /tmp/extract
@@ -38,7 +42,7 @@ mkdir -p .github/workflows && git mv leash/.github/workflows/ci.yml .github/work
 git rm -r --cached leash/.github && rmdir -p leash/.github/workflows 2>/dev/null || true
 
 # 4. push
-git remote add origin git@github.com:emektor/shortleash.git
+git remote add origin git@github.com:emektor/toolwrit.git
 git push -u origin HEAD:main
 ```
 
@@ -70,8 +74,8 @@ npm publish --access public # prepublishOnly runs the tests and build first
 Verify the release the way a stranger would:
 
 ```sh
-cd "$(mktemp -d)" && npm init -y && npm install shortleash
-./node_modules/.bin/leash --version
+cd "$(mktemp -d)" && npm init -y && npm install toolwrit
+./node_modules/.bin/toolwrit --version
 ```
 
 ## PyPI
@@ -87,15 +91,15 @@ python -m twine upload dist/*
 Verify:
 
 ```sh
-python -m venv /tmp/v && /tmp/v/bin/pip install shortleash
-/tmp/v/bin/leash --help
+python -m venv /tmp/v && /tmp/v/bin/pip install toolwrit
+/tmp/v/bin/toolwrit --help
 ```
 
 ## Domain
 
-**[you]** `shortleash.com` and `shortleash.dev` looked unregistered when checked
-by DNS, which is an indication and not a guarantee — confirm at a registrar
-before relying on either.
+**[you]** `toolwrit.com` and `toolwrit.dev` have not been checked since the
+rename. Confirm availability at a registrar — DNS alone is an indication, not a
+guarantee — and register before announcing anything.
 
 ## Versioning
 

@@ -1,9 +1,9 @@
 /**
  * MCP stdio proxy.
  *
- * The cheapest place to put a leash on an agent is the wire between it and its
- * tools. This module spawns a downstream MCP server as a child process and sits
- * in the middle of the stdio transport, so an existing client and an existing
+ * The cheapest place to hold an agent to its writ is the wire between it and
+ * its tools. This module spawns a downstream MCP server as a child process and
+ * sits in the middle of the stdio transport, so an existing client and an existing
  * server both keep working unmodified while every `tools/call` has to pass the
  * policy engine first. No SDK is involved on purpose: MCP over stdio is
  * newline-delimited JSON-RPC 2.0, and re-implementing that is a few dozen lines
@@ -12,7 +12,7 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { LeashDenied, type Leash } from '../leash.js';
+import { ToolwritDenied, type Toolwrit } from '../toolwrit.js';
 import { matchesAnyGlob } from '../policy/match.js';
 import type { Policy } from '../types.js';
 
@@ -29,7 +29,7 @@ interface JsonRpcMessage {
 
 export interface McpProxyOptions {
   /** Policy enforcer. The proxy owns no policy state of its own. */
-  leash: Leash;
+  toolwrit: Toolwrit;
   /** Downstream MCP server executable. */
   command: string;
   args?: string[];
@@ -38,8 +38,8 @@ export interface McpProxyOptions {
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
   /**
-   * The same policy the Leash was constructed with. `Leash` deliberately keeps
-   * its policy private, so tools/list filtering is opt-in: without this the
+   * The same policy the enforcer was constructed with. `Toolwrit` deliberately
+   * keeps its policy private, so tools/list filtering is opt-in: without this the
    * proxy still enforces every call, it just advertises the server's tool list
    * unchanged.
    */
@@ -157,7 +157,7 @@ export function createMcpProxy(options: McpProxyOptions): McpProxy {
 
     try {
       // forwardToChild already resolves immediately for an id-less message.
-      const response = await options.leash.guard(name, args, () => forwardToChild(request));
+      const response = await options.toolwrit.guard(name, args, () => forwardToChild(request));
       if (isNotification) return;
       // Preserve the client's id even if the downstream server echoed something else.
       toClient({ ...response, id: request.id ?? null });
@@ -166,20 +166,20 @@ export function createMcpProxy(options: McpProxyOptions): McpProxy {
         // Nothing is waiting for an answer, so the refusal goes to the operator
         // rather than to the agent. Dropping it is the enforcement.
         warn(
-          err instanceof LeashDenied
+          err instanceof ToolwritDenied
             ? `denied notification tools/call "${name}": ${err.decision.reason}`
             : `error guarding notification tools/call "${name}": ${(err as Error).message}`
         );
         return;
       }
 
-      if (!(err instanceof LeashDenied)) {
+      if (!(err instanceof ToolwritDenied)) {
         warn(`unexpected error guarding ${name}: ${(err as Error).message}`);
         toClient({
           jsonrpc: '2.0',
           id: request.id ?? null,
           result: {
-            content: [{ type: 'text', text: `leash: internal error enforcing policy for "${name}"` }],
+            content: [{ type: 'text', text: `toolwrit: internal error enforcing policy for "${name}"` }],
             isError: true,
           },
         });
@@ -348,7 +348,7 @@ export function createMcpProxy(options: McpProxyOptions): McpProxy {
 }
 
 /** Human-readable refusal, including the constraints that actually failed. */
-function denialText(tool: string, denied: LeashDenied): string {
+function denialText(tool: string, denied: ToolwritDenied): string {
   const lines = [`Denied by policy: ${denied.decision.reason}`];
   if (denied.decision.rule) lines.push(`Rule: ${denied.decision.rule}`);
   for (const violation of denied.decision.violations) {
@@ -411,5 +411,5 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function warn(message: string): void {
   // stdout carries protocol only — anything else there corrupts the session.
-  process.stderr.write(`leash: ${message}\n`);
+  process.stderr.write(`toolwrit: ${message}\n`);
 }

@@ -11,7 +11,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { Leash, LeashDenied } from '../src/leash.js';
+import { Toolwrit, ToolwritDenied } from '../src/toolwrit.js';
 import { GENESIS } from '../src/audit/chain.js';
 import { summarize, verifyAgainstReceipt } from '../src/audit/receipt.js';
 import { verifyChain } from '../src/audit/verify.js';
@@ -19,25 +19,25 @@ import type { Policy } from '../src/types.js';
 import { frozenClock, policy, rule, T0 } from './helpers.js';
 
 /** A run whose calls are all permitted, so a receipt can be read on its own. */
-async function plainRun(): Promise<Leash> {
-  const leash = new Leash({
+async function plainRun(): Promise<Toolwrit> {
+  const toolwrit = new Toolwrit({
     policy: policy({ default: 'allow' }),
     run: 'plain',
     now: frozenClock(),
   });
-  for (let i = 0; i < 3; i++) await leash.guard('fs.read', { path: `/tmp/${i}` }, () => i);
-  return leash;
+  for (let i = 0; i < 3; i++) await toolwrit.guard('fs.read', { path: `/tmp/${i}` }, () => i);
+  return toolwrit;
 }
 
 /** Guard a call that is expected to be refused, keeping the test readable. */
-async function expectDenied(leash: Leash, tool: string, args: Record<string, unknown> = {}) {
-  await assert.rejects(() => leash.guard(tool, args, () => 'ran'), LeashDenied);
+async function expectDenied(toolwrit: Toolwrit, tool: string, args: Record<string, unknown> = {}) {
+  await assert.rejects(() => toolwrit.guard(tool, args, () => 'ran'), ToolwritDenied);
 }
 
 describe('summarize: a plain run', () => {
   it('names the run, its span and its outcome', async () => {
-    const leash = await plainRun();
-    const receipt = summarize(leash.entries());
+    const toolwrit = await plainRun();
+    const receipt = summarize(toolwrit.entries());
 
     assert.equal(receipt.run, 'plain');
     assert.equal(receipt.entryCount, 3);
@@ -51,10 +51,10 @@ describe('summarize: a plain run', () => {
   });
 
   it('quotes the head of the chain and reports it verified', async () => {
-    const leash = await plainRun();
-    const receipt = summarize(leash.entries());
+    const toolwrit = await plainRun();
+    const receipt = summarize(toolwrit.entries());
 
-    assert.equal(receipt.head, leash.head());
+    assert.equal(receipt.head, toolwrit.head());
     assert.equal(receipt.chainOk, true);
   });
 
@@ -77,11 +77,11 @@ describe('summarize: a run with a plan', () => {
     plan: { purpose: 'nightly sync', approvedBy: 'ergin', warnAt: [0.5] },
   });
 
-  function plannedRun(): Leash {
-    const leash = new Leash({ policy: planned, run: 'planned', now: frozenClock() });
-    leash.meter(400, 200); // 600/1000 tokens — crosses the 50% threshold
-    leash.spend(1.5); //      1.5/2 usd     — crosses it in a second dimension
-    return leash;
+  function plannedRun(): Toolwrit {
+    const toolwrit = new Toolwrit({ policy: planned, run: 'planned', now: frozenClock() });
+    toolwrit.meter(400, 200); // 600/1000 tokens — crosses the 50% threshold
+    toolwrit.spend(1.5); //      1.5/2 usd     — crosses it in a second dimension
+    return toolwrit;
   }
 
   it('reports the envelope the operator approved', () => {
@@ -111,7 +111,7 @@ describe('summarize: a run with a plan', () => {
     assert.deepEqual(receipt.consumed, { calls: 0, tokens: 0.6, usd: 0.75 });
   });
 
-  it('does not count leash:plan or leash:warning as tool calls the agent made', () => {
+  it('does not count toolwrit:plan or toolwrit:warning as tool calls the agent made', () => {
     const receipt = summarize(plannedRun().entries());
     // Three bookkeeping entries, none of them an agent action.
     assert.equal(receipt.entryCount, 3);
@@ -119,7 +119,7 @@ describe('summarize: a run with a plan', () => {
   });
 
   it('omits a fraction for a dimension the budget does not cap', () => {
-    const leash = new Leash({
+    const toolwrit = new Toolwrit({
       policy: policy({
         default: 'allow',
         budget: { calls: 4 },
@@ -128,13 +128,13 @@ describe('summarize: a run with a plan', () => {
       run: 'partial',
       now: frozenClock(),
     });
-    assert.deepEqual(summarize(leash.entries()).consumed, { calls: 0 });
+    assert.deepEqual(summarize(toolwrit.entries()).consumed, { calls: 0 });
   });
 });
 
 describe('summarize: denials', () => {
   it('tallies denials by tool so an anomalous run is legible at a glance', async () => {
-    const leash = new Leash({
+    const toolwrit = new Toolwrit({
       policy: policy({
         default: 'allow',
         rules: [rule({ id: 'no-writes', tools: ['fs.write', 'fs.rm'], effect: 'deny' })],
@@ -143,12 +143,12 @@ describe('summarize: denials', () => {
       now: frozenClock(),
     });
 
-    await leash.guard('fs.read', {}, () => 'ok');
-    await expectDenied(leash, 'fs.write');
-    await expectDenied(leash, 'fs.write');
-    await expectDenied(leash, 'fs.rm');
+    await toolwrit.guard('fs.read', {}, () => 'ok');
+    await expectDenied(toolwrit, 'fs.write');
+    await expectDenied(toolwrit, 'fs.write');
+    await expectDenied(toolwrit, 'fs.rm');
 
-    const receipt = summarize(leash.entries());
+    const receipt = summarize(toolwrit.entries());
     assert.equal(receipt.allowed, 1);
     assert.equal(receipt.denied, 3);
     assert.deepEqual(receipt.deniedTools, { 'fs.write': 2, 'fs.rm': 1 });
@@ -157,43 +157,43 @@ describe('summarize: denials', () => {
   });
 
   it('flags exceeded when a call was refused for want of budget', async () => {
-    const leash = new Leash({
+    const toolwrit = new Toolwrit({
       policy: policy({ default: 'allow', budget: { calls: 2 } }),
       run: 'over',
       now: frozenClock(),
     });
 
-    await leash.guard('t', {}, () => 1);
-    await leash.guard('t', {}, () => 2);
-    await expectDenied(leash, 't');
+    await toolwrit.guard('t', {}, () => 1);
+    await toolwrit.guard('t', {}, () => 2);
+    await expectDenied(toolwrit, 't');
 
-    const receipt = summarize(leash.entries());
+    const receipt = summarize(toolwrit.entries());
     assert.equal(receipt.exceeded, true);
     assert.deepEqual(receipt.deniedTools, { t: 1 });
   });
 
   it('leaves exceeded false for a run that stayed under its ceiling', async () => {
-    const leash = new Leash({
+    const toolwrit = new Toolwrit({
       policy: policy({ default: 'allow', budget: { calls: 5 } }),
       run: 'under',
       now: frozenClock(),
     });
-    for (let i = 0; i < 4; i++) await leash.guard('t', {}, () => i);
-    assert.equal(summarize(leash.entries()).exceeded, false);
+    for (let i = 0; i < 4; i++) await toolwrit.guard('t', {}, () => i);
+    assert.equal(summarize(toolwrit.entries()).exceeded, false);
   });
 });
 
 describe('verifyAgainstReceipt: catching a truncated tail', () => {
   it('accepts a chain that still reaches the head the receipt quoted', async () => {
-    const leash = await plainRun();
-    const receipt = summarize(leash.entries());
-    assert.equal(verifyAgainstReceipt(leash.entries(), receipt).ok, true);
+    const toolwrit = await plainRun();
+    const receipt = summarize(toolwrit.entries());
+    assert.equal(verifyAgainstReceipt(toolwrit.entries(), receipt).ok, true);
   });
 
   it('detects a truncation that plain verifyChain accepts', async () => {
-    const leash = await plainRun();
-    const receipt = summarize(leash.entries());
-    const truncated = leash.entries().slice(0, 1);
+    const toolwrit = await plainRun();
+    const receipt = summarize(toolwrit.entries());
+    const truncated = toolwrit.entries().slice(0, 1);
 
     // This is the hole: a prefix of a valid chain is itself a valid chain, so
     // an agent that deletes its last entries hands over a log that verifies.
@@ -206,10 +206,10 @@ describe('verifyAgainstReceipt: catching a truncated tail', () => {
   });
 
   it('reports the chain failure first when the chain is broken as well', async () => {
-    const leash = await plainRun();
-    const receipt = summarize(leash.entries());
+    const toolwrit = await plainRun();
+    const receipt = summarize(toolwrit.entries());
 
-    const tampered = leash.entries().map((e) => ({ ...e }));
+    const tampered = toolwrit.entries().map((e) => ({ ...e }));
     tampered[1]!.args = { path: '/etc/shadow' };
 
     const checked = verifyAgainstReceipt(tampered, receipt);
@@ -220,7 +220,7 @@ describe('verifyAgainstReceipt: catching a truncated tail', () => {
   it('refuses a receipt issued for a different run', async () => {
     const receipt = summarize((await plainRun()).entries());
 
-    const other = new Leash({ policy: policy({ default: 'allow' }), run: 'other', now: frozenClock() });
+    const other = new Toolwrit({ policy: policy({ default: 'allow' }), run: 'other', now: frozenClock() });
     await other.guard('fs.read', {}, () => 1);
 
     const checked = verifyAgainstReceipt(other.entries(), receipt);

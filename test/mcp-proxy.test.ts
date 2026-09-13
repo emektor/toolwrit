@@ -21,7 +21,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMcpProxy, visibleTools } from '../src/adapters/mcp-proxy.js';
-import { Leash } from '../src/leash.js';
+import { Toolwrit } from '../src/toolwrit.js';
 import { parsePolicy } from '../src/policy/load.js';
 import type { Policy } from '../src/types.js';
 import { frozenClock } from './helpers.js';
@@ -65,7 +65,7 @@ interface Harness {
   outputErrors: Error[];
   /** Every message the downstream server actually received, in order. */
   serverLog(): Message[];
-  leash: Leash;
+  toolwrit: Toolwrit;
   stop(): Promise<void>;
   exited(): Promise<number>;
 }
@@ -80,7 +80,7 @@ async function withProxy(
   options: ProxyOptions,
   body: (h: Harness) => Promise<void>
 ): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), 'leash-mcp-'));
+  const dir = mkdtempSync(join(tmpdir(), 'toolwrit-mcp-'));
   const logFile = join(dir, 'received.jsonl');
   writeFileSync(logFile, '');
 
@@ -117,9 +117,9 @@ async function withProxy(
     }
   });
 
-  const leash = new Leash({ policy, now: frozenClock() });
+  const toolwrit = new Toolwrit({ policy, now: frozenClock() });
   const proxy = createMcpProxy({
-    leash,
+    toolwrit,
     command: process.execPath,
     args: [FIXTURE, logFile],
     input,
@@ -164,7 +164,7 @@ async function withProxy(
         .filter((line) => line.trim().length > 0)
         .map((line) => JSON.parse(line) as Message);
     },
-    leash,
+    toolwrit,
     stop: () => proxy.stop(),
     exited: () => proxy.exited(),
   };
@@ -310,7 +310,7 @@ describe('mcp proxy: enforcement', () => {
       assert.equal(resultText(stray), 'ran fs.read');
       assert.equal(h.received.some((m) => m.id === 42), false);
       // The call itself was allowed and metered — only the reply went astray.
-      assert.equal(h.leash.usage().calls, 1);
+      assert.equal(h.toolwrit.usage().calls, 1);
     });
   });
 });
@@ -721,7 +721,7 @@ describe('mcp proxy: lifecycle and exit status', () => {
     output.resume();
     output.on('error', () => {});
     return createMcpProxy({
-      leash: new Leash({ policy: ALLOW_ALL, now: frozenClock() }),
+      toolwrit: new Toolwrit({ policy: ALLOW_ALL, now: frozenClock() }),
       command,
       args,
       input,
@@ -750,11 +750,11 @@ describe('mcp proxy: lifecycle and exit status', () => {
 
   it('reports 127 when the command cannot be spawned at all', TIMEOUT, async () => {
     const stderr = captureStderr();
-    const proxy = bare('leash-no-such-command-8f21a', []);
+    const proxy = bare('toolwrit-no-such-command-8f21a', []);
     try {
       await proxy.start();
       assert.equal(await proxy.exited(), 127);
-      assert.match(stderr.text(), /failed to start "leash-no-such-command-8f21a"/);
+      assert.match(stderr.text(), /failed to start "toolwrit-no-such-command-8f21a"/);
     } finally {
       stderr.restore();
     }
@@ -766,7 +766,7 @@ describe('mcp proxy: lifecycle and exit status', () => {
     // bad --command hangs instead of exiting 127. stop() now also races the
     // settled exit status, which the spawn failure resolves.
     const stderr = captureStderr();
-    const proxy = bare('leash-no-such-command-8f21a', []);
+    const proxy = bare('toolwrit-no-such-command-8f21a', []);
     try {
       await proxy.start();
       const settled = await Promise.race([
@@ -814,7 +814,7 @@ describe('mcp proxy: lifecycle and exit status', () => {
   it('leaves a pending tools/call with no reply at all when the child dies', TIMEOUT, async () => {
     // KNOWN LIMITATION, pinned rather than fixed. On exit the proxy resolves
     // every pending waiter, but a tools/call waiter is resolved *through*
-    // `leash.guard`, so its continuation runs on a microtask — after the same
+    // `toolwrit.guard`, so its continuation runs on a microtask — after the same
     // exit handler has already called output.end(). The reply is written to an
     // ended stream and the client is told nothing whatsoever about that call,
     // where a plain passthrough request at least gets the error above.
@@ -863,7 +863,7 @@ describe('mcp proxy: budgets', () => {
       assert.deepEqual([isError(first), isError(second), isError(third)], [false, false, true]);
       assert.match(resultText(third), /call budget exhausted/);
       assert.deepEqual(toolsCalled(h.serverLog()), ['fs.read', 'fs.read']);
-      assert.equal(h.leash.usage().calls, 2);
+      assert.equal(h.toolwrit.usage().calls, 2);
     });
   });
 });
@@ -895,7 +895,7 @@ describe('mcp proxy: the bytes ceiling under pipelining', () => {
   it('KNOWN LIMITATION: a pipelined batch overruns the bytes ceiling', TIMEOUT, async () => {
     // Reported by review and reproduced here exactly as it behaves today.
     //
-    // `Leash.guard` evaluates the policy synchronously and only adds the
+    // `Toolwrit.guard` evaluates the policy synchronously and only adds the
     // result's size to the ledger *after* the downstream call resolves. A
     // client that writes several tools/call messages before reading any reply
     // gets all of them handled in one synchronous pass, so every decision in
@@ -915,7 +915,7 @@ describe('mcp proxy: the bytes ceiling under pipelining', () => {
       assert.deepEqual(replies.map(isError), [false, false, false, false]);
       // All four reached the downstream server despite a 100-byte ceiling.
       assert.equal(toolsCalled(h.serverLog()).length, 4);
-      assert.ok(h.leash.usage().bytes > 2000, 'the ceiling is overrun by the whole batch');
+      assert.ok(h.toolwrit.usage().bytes > 2000, 'the ceiling is overrun by the whole batch');
 
       // The ledger catches up once the batch settles, so the very next call is
       // refused — the breach is bounded by the client's pipeline depth.

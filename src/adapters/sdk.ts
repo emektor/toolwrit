@@ -1,5 +1,5 @@
 /**
- * Adapters that drop Leash into an agent loop that already exists.
+ * Adapters that drop Toolwrit into an agent loop that already exists.
  *
  * The core API throws on refusal, which is right for application code: a
  * silently-skipped side effect is worse than a crash. Inside an agent loop it
@@ -10,14 +10,14 @@
  * an `isError` result, an Anthropic `tool_result` with `is_error`, or an
  * OpenAI `role: "tool"` message.
  *
- * The SDK shapes below are declared structurally on purpose. Leash takes no
+ * The SDK shapes below are declared structurally on purpose. Toolwrit takes no
  * dependency on `@anthropic-ai/sdk` or `openai`: a policy sidecar that forces
  * you to upgrade your model client is not a sidecar. The types are permissive
  * (extra fields allowed) so real SDK objects assign to them unchanged.
  */
 
 import type { TokenPrice } from '../budget/ledger.js';
-import { Leash, LeashDenied } from '../leash.js';
+import { Toolwrit, ToolwritDenied } from '../toolwrit.js';
 
 /** A tool implementation: arguments in, result out. Sync or async. */
 export type ToolHandler<
@@ -105,16 +105,16 @@ export interface OpenAIUsage {
  * A refusal is returned, never thrown: see the file header.
  */
 export function wrapTool<A extends Record<string, unknown>, R>(
-  leash: Leash,
+  toolwrit: Toolwrit,
   name: string,
   handler: ToolHandler<A, R>
 ): GuardedHandler<A, R> {
   return async (args: A): Promise<R | ToolErrorResult> => {
     try {
-      return await leash.guard(name, args, () => handler(args));
+      return await toolwrit.guard(name, args, () => handler(args));
     } catch (err) {
-      if (err instanceof LeashDenied) return refusal(err);
-      // Anything else is a genuine failure inside the tool. Leash has no
+      if (err instanceof ToolwritDenied) return refusal(err);
+      // Anything else is a genuine failure inside the tool. Toolwrit has no
       // opinion about those and must not disguise them as policy decisions.
       throw err;
     }
@@ -123,25 +123,25 @@ export function wrapTool<A extends Record<string, unknown>, R>(
 
 /** `wrapTool` across a whole registry, preserving the tool names as keys. */
 export function wrapTools(
-  leash: Leash,
+  toolwrit: Toolwrit,
   handlers: Record<string, ToolHandler>
 ): Record<string, GuardedHandler> {
   const wrapped: Record<string, GuardedHandler> = {};
   for (const [name, handler] of Object.entries(handlers)) {
-    wrapped[name] = wrapTool(leash, name, handler);
+    wrapped[name] = wrapTool(toolwrit, name, handler);
   }
   return wrapped;
 }
 
 /**
- * Run one Anthropic `tool_use` block under the leash and return the
+ * Run one Anthropic `tool_use` block under the policy and return the
  * `tool_result` block to append to the next user turn.
  *
  * This is the whole integration for an Anthropic SDK user: find the tool_use
  * blocks in the response, pass each one here, send the results back.
  */
 export async function guardToolUse(
-  leash: Leash,
+  toolwrit: Toolwrit,
   block: ToolUseBlock,
   handlers: Record<string, ToolHandler>
 ): Promise<ToolResultBlock> {
@@ -149,7 +149,7 @@ export async function guardToolUse(
   const handler = handlers[block.name];
 
   try {
-    const result = await leash.guard(block.name, args, () => {
+    const result = await toolwrit.guard(block.name, args, () => {
       // Checked inside `guard` so the decision is still audited: a model asking
       // for a tool that does not exist is worth having on the record.
       if (!handler) throw new UnknownTool(block.name);
@@ -157,7 +157,7 @@ export async function guardToolUse(
     });
     return toolResult(block.id, toText(result), false);
   } catch (err) {
-    if (err instanceof LeashDenied) return toolResult(block.id, denialText(err), true);
+    if (err instanceof ToolwritDenied) return toolResult(block.id, denialText(err), true);
     if (err instanceof UnknownTool) return toolResult(block.id, err.message, true);
     throw err;
   }
@@ -165,13 +165,13 @@ export async function guardToolUse(
 
 /**
  * The OpenAI equivalent. Arguments arrive as a JSON *string* the model wrote,
- * so parsing can fail; when it does we still route the call through the leash
- * before refusing it. A model emitting malformed arguments for a privileged
- * tool is a policy-relevant event, and an audit chain with a hole in it where
+ * so parsing can fail; when it does we still route the call through the policy
+ * engine before refusing it. A model emitting malformed arguments for a
+ * privileged tool is a policy-relevant event, and an audit chain with a hole where
  * the interesting call should be is worth very little.
  */
 export async function guardOpenAIToolCall(
-  leash: Leash,
+  toolwrit: Toolwrit,
   toolCall: OpenAIToolCall,
   handlers: Record<string, ToolHandler>
 ): Promise<OpenAIToolMessage> {
@@ -185,12 +185,12 @@ export async function guardOpenAIToolCall(
       // The raw text is recorded under a reserved key so the audit entry shows
       // exactly what the model produced. The result is a refusal whatever the
       // policy says — we have no arguments to hand the tool.
-      await leash.guard(name, { _rawArguments: raw }, () => text);
+      await toolwrit.guard(name, { _rawArguments: raw }, () => text);
     } catch (err) {
       // The policy almost always refuses this (the arguments it wanted to check
       // are not there), but the model needs to hear about the broken JSON, not
       // about the constraints that could not be evaluated because of it.
-      if (err instanceof LeashDenied) {
+      if (err instanceof ToolwritDenied) {
         return {
           role: 'tool',
           tool_call_id: toolCall.id,
@@ -204,26 +204,26 @@ export async function guardOpenAIToolCall(
 
   const handler = handlers[name];
   try {
-    const result = await leash.guard(name, parsed.args, () => {
+    const result = await toolwrit.guard(name, parsed.args, () => {
       if (!handler) throw new UnknownTool(name);
       return handler(parsed.args);
     });
     return { role: 'tool', tool_call_id: toolCall.id, content: toText(result) };
   } catch (err) {
-    if (err instanceof LeashDenied) return { role: 'tool', tool_call_id: toolCall.id, content: denialText(err) };
+    if (err instanceof ToolwritDenied) return { role: 'tool', tool_call_id: toolCall.id, content: denialText(err) };
     if (err instanceof UnknownTool) return { role: 'tool', tool_call_id: toolCall.id, content: err.message };
     throw err;
   }
 }
 
 /** Meter an Anthropic response's usage block against the run budget. */
-export function meterAnthropicUsage(leash: Leash, usage: AnthropicUsage, price?: TokenPrice): void {
-  leash.meter(usage.input_tokens ?? 0, usage.output_tokens ?? 0, price);
+export function meterAnthropicUsage(toolwrit: Toolwrit, usage: AnthropicUsage, price?: TokenPrice): void {
+  toolwrit.meter(usage.input_tokens ?? 0, usage.output_tokens ?? 0, price);
 }
 
 /** Meter an OpenAI completion's usage block against the run budget. */
-export function meterOpenAIUsage(leash: Leash, usage: OpenAIUsage, price?: TokenPrice): void {
-  leash.meter(usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0, price);
+export function meterOpenAIUsage(toolwrit: Toolwrit, usage: OpenAIUsage, price?: TokenPrice): void {
+  toolwrit.meter(usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0, price);
 }
 
 /** Raised when the model names a tool the registry does not have. */
@@ -234,7 +234,7 @@ class UnknownTool extends Error {
   }
 }
 
-function refusal(err: LeashDenied): ToolErrorResult {
+function refusal(err: ToolwritDenied): ToolErrorResult {
   return { isError: true, content: [{ type: 'text', text: denialText(err) }] };
 }
 
@@ -246,7 +246,7 @@ function toolResult(id: string, text: string, isError: boolean): ToolResultBlock
  * Refusal text aimed at the model: what was refused, why, which argument was at
  * fault, and the audit hash so a human can find the same event in the log.
  */
-function denialText(err: LeashDenied): string {
+function denialText(err: ToolwritDenied): string {
   const lines = [`tool "${err.tool}" was refused by policy: ${err.decision.reason}`];
   for (const violation of err.decision.violations) {
     // A blanket deny rule reports its description as both the reason and the
