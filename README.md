@@ -22,22 +22,18 @@ That is all Toolwrit is.
 
 ## 60-second start
 
-The registry releases are not up yet, so install from the repository. Both
-install a binary named `toolwrit`:
+```
+npm install toolwrit
+```
+
+The package installs a binary named `toolwrit`. The Python port speaks the same
+policy language and writes a compatible audit chain — see
+[`js/docs/python.md`](js/docs/python.md). Until it is on PyPI, install it from the
+repository; it installs the same `toolwrit` binary:
 
 ```
 pip install "git+https://github.com/emektor/toolwrit.git#subdirectory=python"
 ```
-
-```
-git clone https://github.com/emektor/toolwrit
-npm install ./toolwrit/js          # builds on install
-```
-
-`pip install toolwrit` and `npm install toolwrit` replace both once the first
-version is published; the names are secured and nothing else changes.
-The Python port speaks the same policy language and writes a compatible audit
-chain — see [`js/docs/python.md`](js/docs/python.md).
 
 **`toolwrit.yaml`**
 
