@@ -1,5 +1,7 @@
 # Toolwrit
 
+**English** · [Deutsch](README.de.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md)
+
 **A written authority for AI agents.** Allowlist the tools, cap the budget, prove what happened.
 
 Apache-2.0 · Node >= 20 · Python >= 3.10
