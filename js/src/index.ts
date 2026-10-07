@@ -40,6 +40,13 @@ export type { AuditEntry, AuditLogOptions } from './audit/chain.js';
 export { verifyChain, verifyFile } from './audit/verify.js';
 export type { VerifyResult } from './audit/verify.js';
 export { summarize, verifyAgainstReceipt } from './audit/receipt.js';
+export { DEFAULT_TSA, requestTimestamp, verifyTimestamp } from './audit/timestamp.js';
+export type {
+  ReceiptTimestamp,
+  RequestTimestampOptions,
+  TimestampCheck,
+  VerifyTimestampOptions,
+} from './audit/timestamp.js';
 export type { ReceiptConsumed, ReceiptPlan, ReceiptWarning, RunReceipt } from './audit/receipt.js';
 
 export type {

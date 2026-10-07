@@ -14,12 +14,20 @@
  * fit in a page.
  */
 
+import { X509Certificate } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { rootCertificates } from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createMcpProxy } from './adapters/mcp-proxy.js';
 import type { AuditEntry } from './audit/chain.js';
 import { summarize, verifyAgainstReceipt, type RunReceipt } from './audit/receipt.js';
+import {
+  DEFAULT_TSA,
+  requestTimestamp,
+  verifyTimestamp,
+  type ReceiptTimestamp,
+} from './audit/timestamp.js';
 import { verifyChain, verifyFile, type VerifyResult } from './audit/verify.js';
 import { Toolwrit } from './toolwrit.js';
 import { loadPolicyFile } from './policy/load.js';
@@ -29,9 +37,9 @@ const USAGE = `toolwrit — a written authority for AI agents.
 
 Usage:
   toolwrit run     --policy <file> [--audit <file>] [--run <id>] -- <command> [args...]
-  toolwrit verify  <audit.jsonl> [--against <anchor.jsonl>]
+  toolwrit verify  <audit.jsonl> [--against <anchor.jsonl> [--require-timestamp] [--max-lag <seconds>]]
   toolwrit receipt <audit.jsonl> [--json]
-  toolwrit anchor  <audit.jsonl> --to <anchor.jsonl>
+  toolwrit anchor  <audit.jsonl> --to <anchor.jsonl> [--tsa [url]]
   toolwrit check   --policy <file> --tool <name> [--args <json>]
   toolwrit explain --policy <file>
 
@@ -41,6 +49,13 @@ Options:
   --against    Check the log's head against the receipt anchored for this run.
   --json       Print the receipt as one JSON object instead of prose.
   --to         Anchor file to append the receipt to.
+  --tsa        Have an RFC 3161 Time-Stamp Authority sign the head (default
+               ${DEFAULT_TSA}).
+  --tsa-ca     PEM file of extra root certificates to trust for timestamps.
+  --require-timestamp
+               Fail the anchor check when the receipt carries no timestamp.
+  --max-lag    Fail when the timestamp is more than this many seconds after
+               the run's last entry.
 
 Anchoring:
   A chain verifies against itself, so a truncated log still passes: a prefix of
@@ -51,11 +66,17 @@ Anchoring:
   append-only retention, a colleague's inbox). Toolwrit cannot enforce that; it
   can only make putting it there one command.
 
+  With --tsa the receipt is also signed by an outside Time-Stamp Authority, so
+  it cannot be forged or backdated even where the agent can reach it: a log
+  rewritten later can only be timestamped later, and "verify --against" shows
+  how long after the run's last entry that was.
+
 Exit codes:
   run      0 when the downstream server exits cleanly.
   verify   0 when every requested check passes, 1 when any fails.
   receipt  0 when the chain verifies, 1 when it does not.
-  anchor   0 when the receipt was appended, 1 when the chain does not verify.
+  anchor   0 when the receipt was appended, 1 when the chain does not verify
+           or the timestamp could not be obtained.
   check    0 allow, 1 deny, 2 ask.
 `;
 
@@ -73,7 +94,7 @@ interface ParsedArgs {
  * never be interpreted, or a server's own `--policy` flag would be stolen.
  */
 /** Flags that are on/off switches and therefore never consume the next token. */
-const BOOLEAN_FLAGS = new Set(['json', 'help', 'version']);
+const BOOLEAN_FLAGS = new Set(['json', 'help', 'version', 'require-timestamp']);
 
 function parseArgs(argv: readonly string[]): ParsedArgs {
   const flags = new Map<string, string>();
@@ -244,7 +265,88 @@ function cmdVerify(parsed: ParsedArgs): void {
   }
 
   process.stdout.write(`ok: anchor check — head matches the receipt anchored for run ${run}\n`);
+
+  // The third check, when there is something to check: the anchor line itself
+  // may have been rewritten along with the log, and only an outside signature
+  // over the head, dated close to the run, rules that out.
+  const timestamp = (receipt as AnchorLine).timestamp;
+  if (timestamp) {
+    if (!checkTimestamp(timestamp, against.head, summarize(entries).to, parsed)) {
+      process.exitCode = 1;
+      return;
+    }
+  } else if (parsed.flags.has('require-timestamp')) {
+    process.stderr.write(
+      `FAILED: timestamp check — the receipt for run ${run} carries no timestamp\n` +
+        '  detail: anchor with --tsa so the receipt cannot be forged or backdated\n'
+    );
+    process.exitCode = 1;
+    return;
+  }
+
   process.stdout.write(`head: ${against.head}\n`);
+}
+
+/** One line of an anchor file: a receipt, timestamped when anchored with --tsa. */
+type AnchorLine = RunReceipt & { timestamp?: ReceiptTimestamp };
+
+function checkTimestamp(
+  timestamp: ReceiptTimestamp,
+  head: string,
+  lastEntryAt: number | null,
+  parsed: ParsedArgs
+): boolean {
+  const check = verifyTimestamp(timestamp.token, head, { roots: trustedRoots(parsed) });
+  if (!check.ok || !check.time) {
+    process.stderr.write(`FAILED: timestamp check — ${check.failure}\n`);
+    return false;
+  }
+
+  const lag = lastEntryAt === null ? null : Math.round((check.time.getTime() - lastEntryAt) / 1000);
+  const lagText =
+    lag === null ? '' : lag >= 0 ? ` (${lag}s after the last entry)` : ` (${-lag}s BEFORE the last entry)`;
+
+  // A head cannot be timestamped before its last entry was written. A clock
+  // skew of a few minutes is ordinary; more means the entries' times are false.
+  if (lag !== null && lag < -300) {
+    process.stderr.write(
+      `FAILED: timestamp check — the log claims entries written after the TSA saw its head${lagText}\n`
+    );
+    return false;
+  }
+  const maxLag = parsed.flags.get('max-lag');
+  if (maxLag !== undefined) {
+    const limit = Number(maxLag);
+    if (!Number.isFinite(limit) || limit < 0) throw new CliError('--max-lag takes a number of seconds');
+    if (lag !== null && lag > limit) {
+      process.stderr.write(
+        `FAILED: timestamp check — head was timestamped ${lag}s after the last entry, more than --max-lag ${limit}\n` +
+          '  detail: a late timestamp is what a log rewritten after the run looks like\n'
+      );
+      return false;
+    }
+  }
+
+  process.stdout.write(
+    `ok: timestamp check — ${check.signer} vouches the head existed at ${check.time.toISOString()}${lagText}\n`
+  );
+  return true;
+}
+
+/** Node's bundled Mozilla roots, plus any the operator names with --tsa-ca. */
+function trustedRoots(parsed: ParsedArgs): X509Certificate[] | undefined {
+  const file = parsed.flags.get('tsa-ca');
+  if (file === undefined) return undefined;
+  if (file === 'true') throw new CliError('--tsa-ca needs a PEM file');
+  let pem: string;
+  try {
+    pem = readFileSync(file, 'utf8');
+  } catch (err) {
+    throw new CliError(`cannot read --tsa-ca file ${file} (${(err as Error).message})`);
+  }
+  const blocks = pem.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? [];
+  if (blocks.length === 0) throw new CliError(`--tsa-ca file ${file} holds no PEM certificates`);
+  return [...rootCertificates, ...blocks].map((block) => new X509Certificate(block));
 }
 
 function reportFailure(headline: string, result: VerifyResult): void {
@@ -273,7 +375,15 @@ function cmdReceipt(parsed: ParsedArgs): void {
   if (!receipt.chainOk) process.exitCode = 1;
 }
 
-function cmdAnchor(parsed: ParsedArgs): void {
+async function cmdAnchor(parsed: ParsedArgs): Promise<void> {
+  // Checked first: `--tsa audit.jsonl` swallows the filename, and the error
+  // worth reporting is the misplaced flag, not the "missing" file.
+  const tsaFlag = parsed.flags.get('tsa');
+  const tsa = tsaFlag === 'true' ? DEFAULT_TSA : tsaFlag;
+  if (tsa !== undefined && !/^https?:\/\//.test(tsa)) {
+    throw new CliError(`--tsa takes a URL, got "${tsa}"; write --tsa=<url> or put --tsa last`);
+  }
+
   const file = parsed.positional[1];
   if (!file) throw new CliError('anchor needs an audit file, e.g. `toolwrit anchor audit.jsonl --to anchors.jsonl`');
   const target = requireFlag(parsed, 'to');
@@ -285,17 +395,32 @@ function cmdAnchor(parsed: ParsedArgs): void {
     return;
   }
 
+  let line: AnchorLine = receipt;
+  if (tsa !== undefined) {
+    try {
+      line = { ...receipt, timestamp: await requestTimestamp(receipt.head, { tsa, roots: trustedRoots(parsed) }) };
+    } catch (err) {
+      // Nothing is written: a receipt the operator asked to have timestamped
+      // must not quietly land without one.
+      process.stderr.write(`FAILED: could not timestamp run ${receipt.run} — ${(err as Error).message}\n`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   try {
     mkdirSync(dirname(target), { recursive: true });
-    appendFileSync(target, `${JSON.stringify(receipt)}\n`, 'utf8');
+    appendFileSync(target, `${JSON.stringify(line)}\n`, 'utf8');
   } catch (err) {
     throw new CliError(`cannot append to anchor file ${target} (${(err as Error).message})`);
   }
 
   process.stdout.write(`anchored run ${receipt.run} (head ${receipt.head}) to ${target}\n`);
-  process.stdout.write(
-    'note: an anchor only proves anything where the agent cannot rewrite it.\n'
-  );
+  if (line.timestamp) {
+    process.stdout.write(`timestamped by ${line.timestamp.tsa} at ${line.timestamp.time}\n`);
+  } else {
+    process.stdout.write('note: an anchor only proves anything where the agent cannot rewrite it.\n');
+  }
 }
 
 /** Read a JSONL audit file into entries, failing loudly rather than skipping lines. */

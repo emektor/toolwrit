@@ -142,9 +142,9 @@ A refusal is returned to the agent as an **MCP tool error, not a protocol error*
 
 ```
 toolwrit run     --policy <file> [--audit <file>] [--run <id>] -- <command> [args...]
-toolwrit verify  <audit.jsonl> [--against <anchor.jsonl>]
+toolwrit verify  <audit.jsonl> [--against <anchor.jsonl> [--require-timestamp] [--max-lag <seconds>]]
 toolwrit receipt <audit.jsonl> [--json]
-toolwrit anchor  <audit.jsonl> --to <anchor.jsonl>
+toolwrit anchor  <audit.jsonl> --to <anchor.jsonl> [--tsa [url]] [--tsa-ca <roots.pem>]
 toolwrit check   --policy <file> --tool <name> [--args <json>]
 toolwrit explain --policy <file>
 ```
@@ -152,9 +152,9 @@ toolwrit explain --policy <file>
 | Command | Purpose | Exit codes |
 | --- | --- | --- |
 | `run` | Wrap an MCP server process; enforce every `tools/call`. | passthrough |
-| `verify` | Verify the hash chain of an audit file. With `--against`, also check its head still matches the receipt anchored for that run. | `0` every requested check passed, `1` any failed |
+| `verify` | Verify the hash chain of an audit file. With `--against`, also check its head still matches the receipt anchored for that run, and the receipt's timestamp when it has one. | `0` every requested check passed, `1` any failed |
 | `receipt` | Summarise a run as one object — plan, usage, outcome, warnings. `--json` for one line of JSON. | `0` chain verifies, `1` it does not |
-| `anchor` | Append that receipt to an append-only anchor file. | `0` appended, `1` the chain does not verify |
+| `anchor` | Append that receipt to an append-only anchor file. `--tsa` has a Time-Stamp Authority sign it first. | `0` appended, `1` the chain does not verify or the timestamp failed |
 | `check` | Evaluate a single hypothetical call against a policy. | `0` allow, `1` deny, `2` ask |
 | `explain` | Human-readable policy summary for a reviewer. | `0` |
 
@@ -720,6 +720,47 @@ toolwrit anchor audit.jsonl --to /mnt/worm/anchors.jsonl   # a volume the agent'
 
 Another host, an object store with object-lock or append-only retention, a log pipeline under credentials the agent process does not hold, a ticket, a colleague's inbox. Pick by asking who has to be convinced. [`js/docs/threat-model.md`](js/docs/threat-model.md) lays out the options in ascending order of effort.
 
+### Timestamping the receipt
+
+`--tsa` closes most of that gap. The receipt's head is sent to an outside **RFC 3161 Time-Stamp Authority**, which signs "this head existed at time T" with a key the agent does not hold. The signed token goes into the anchor line:
+
+```
+toolwrit anchor audit.jsonl --to anchors.jsonl --tsa
+```
+
+```
+anchored run tsa-fixture (head 834459b62224281a5f118865e6fd8f44d4518cf7adc8b4da04dff01d061fca16) to anchors.jsonl
+timestamped by http://timestamp.digicert.com at 2026-10-07T13:33:08.000Z
+```
+
+The default TSA is DigiCert's public service: free, no account, and its certificate chains to a root that ships with Node. Any other RFC 3161 service works with `--tsa <url>`; one whose root Node does not ship (FreeTSA, an internal TSA) needs `--tsa-ca <roots.pem>`. If the TSA cannot be reached or its answer does not verify, `anchor` exits `1` and writes nothing — a receipt you asked to have timestamped never lands without one.
+
+`verify --against` then runs a third check whenever the receipt carries a timestamp:
+
+```
+toolwrit verify audit.jsonl --against anchors.jsonl --require-timestamp --max-lag 60
+ok: chain check — 4 entries verified
+ok: anchor check — head matches the receipt anchored for run tsa-fixture
+ok: timestamp check — DigiCert SHA256 RSA4096 Timestamp Responder 2026 1 vouches the head existed at 2026-10-07T13:33:08.000Z (0s after the last entry)
+head: 834459b62224281a5f118865e6fd8f44d4518cf7adc8b4da04dff01d061fca16
+```
+
+What this buys, precisely:
+
+- **The receipt cannot be forged or backdated.** Editing the head, the time, or the signature in the anchor line fails the check, and a token cannot be moved onto another receipt. The anchor file can now live next to the log without being decoration.
+- **A rewrite after the fact shows up as lateness.** Someone who truncates or rewrites the log can only obtain a timestamp *now*. `--max-lag <seconds>` fails any receipt timestamped longer than that after the run's last entry, which is what a log rewritten later looks like. Anchor at the end of every run and a tight bound costs nothing.
+- **A missing timestamp is not a pass.** Deleting the line fails the anchor check, as before; stripping only its `timestamp` field fails with `--require-timestamp`.
+
+What it does not buy: a forger who rewrites the *entry times* too, and timestamps the result promptly, produces a log that is internally consistent and sealed on time — for the wrong time. Catching that needs one fact from outside the log: when the run actually happened (the scheduler, the billing record, the ticket). Compare it with the time the TSA vouched for.
+
+The head is already a SHA-256 digest, so it is the timestamp's message imprint unchanged. Anyone can check a token without Toolwrit:
+
+```
+openssl ts -verify -digest <head> -token_in -in token.der -CAfile roots.pem
+```
+
+where `token.der` is the base64-decoded `timestamp.token` field. Programmatically: `requestTimestamp(head, { tsa })` and `verifyTimestamp(token, head)`.
+
 ---
 
 ## What Toolwrit is not
@@ -731,7 +772,8 @@ Being straight about the boundary is worth more than overclaiming.
 - **It is not a network egress filter.** `urlHosts` constrains a *URL-shaped argument you chose to constrain*. A tool that opens its own sockets is invisible to Toolwrit. If you need egress control, you need it at the network layer.
 - **It governs the tool boundary only.** Anything a tool does internally, anything the model does without calling a tool, and anything another process on the host does are all outside its remit.
 - **The audit log is tamper-evident, not tamper-proof.** An attacker with write access to the file can rewrite the entire chain consistently, and the result verifies perfectly. Nothing inside a file distinguishes an honest chain from a consistently forged one. Evidence requires that the head hash be anchored somewhere they do not control. See [`js/docs/threat-model.md`](js/docs/threat-model.md).
-- **`verify` alone cannot detect truncation.** A prefix of a valid chain is a valid chain. Only `verify --against` an anchored receipt catches a tail that was cut off — and only if the anchor lives somewhere the agent cannot rewrite. Toolwrit cannot enforce that; it can only make putting it there one command.
+- **`verify` alone cannot detect truncation.** A prefix of a valid chain is a valid chain. Only `verify --against` an anchored receipt catches a tail that was cut off — and only if the anchor lives somewhere the agent cannot rewrite, or is timestamped (`anchor --tsa`) and checked with `--max-lag`.
+- **A timestamp proves when, not what really happened.** It shows a head existed by time T. A forger who also rewrites entry times and timestamps promptly is caught only by comparing T with when the run actually took place.
 - **A bytes ceiling bounds a run at the limit plus one call, not at the limit.** A result's size is not knowable before the tool runs, so the breaching call completes and the next one is refused. It bounds iteration, not a single oversized response.
 - **Byte measurement under-counts an unserialisable result.** A cyclic object or a throwing `toJSON` falls back to its string form, which is usually much smaller than the data it holds. This fails open, and is documented rather than hidden.
 - **`approvedBy` is recorded, not verified.** A plan's approver is a string Toolwrit writes into the chain. It is evidence of what the policy file claimed, not proof that a particular human agreed.
@@ -763,6 +805,10 @@ The wedge is narrow and deliberate: Toolwrit does one layer, deterministically, 
 - [`js/docs/threat-model.md`](js/docs/threat-model.md) — what Toolwrit defends against, what it does not, and how to anchor the audit chain.
 - [`js/docs/python.md`](js/docs/python.md) — the Python package (`toolwrit`, imports as `toolwrit`), its API, and the chain-compatibility guarantee.
 - [`SECURITY-REVIEW.md`](SECURITY-REVIEW.md) — two independent reviews, every finding they produced, the four that were published as open before being fixed, and the one that is still open.
+
+## Commercial support
+
+Integration help, custom policy work or a port to another language: [erginsakoglu@gmail.com](mailto:erginsakoglu@gmail.com).
 
 ## Licence
 
