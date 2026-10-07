@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "toolwrit"
-version = "0.1.0"
+version = "0.2.0"
 description = "A written authority for AI agents. Allowlist the tools, cap the budget, prove what happened."
 readme = "README.md"
 requires-python = ">=3.10"
