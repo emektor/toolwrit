@@ -77,7 +77,10 @@ jobs:
       - run: npm run build
         working-directory: js
 
-      - run: pip install pytest pyyaml
+      # Install the package, as ci.yml does: the sources live in `src/`, so a
+      # bare `pytest` cannot import `toolwrit`.
+      - run: pip install -e ".[test]"
+        working-directory: python
       - run: python -m pytest -q
         working-directory: python
 
