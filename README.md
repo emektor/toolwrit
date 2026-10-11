@@ -810,6 +810,8 @@ The wedge is narrow and deliberate: Toolwrit does one layer, deterministically, 
 
 ## Commercial support
 
+**Evidence pack.** Send your policy file and get back a PDF report and a sealed evidence folder: every rule tested with legitimate calls and with attacks on its conditions, rate limits and budgets exercised, and every decision in a hash-chained log timestamped by an independent RFC 3161 authority, verifiable with one command. Launch price €49 for the first 10 packs (then €149), €19 to re-test after a policy change. [Sample report](https://emektor.github.io/toolwrit/sample-evidence-pack.pdf).
+
 Integration help, custom policy work or a port to another language: [erginsakoglu@gmail.com](mailto:erginsakoglu@gmail.com).
 
 ## Licence
