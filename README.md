@@ -149,6 +149,7 @@ toolwrit receipt <audit.jsonl> [--json]
 toolwrit anchor  <audit.jsonl> --to <anchor.jsonl> [--tsa [url]] [--tsa-ca <roots.pem>]
 toolwrit check   --policy <file> --tool <name> [--args <json>]
 toolwrit explain --policy <file>
+toolwrit drift   <audit.jsonl>... [--run <id>] [--factor <n>] [--json]
 ```
 
 | Command | Purpose | Exit codes |
@@ -159,6 +160,7 @@ toolwrit explain --policy <file>
 | `anchor` | Append that receipt to an append-only anchor file. `--tsa` has a Time-Stamp Authority sign it first. | `0` appended, `1` the chain does not verify or the timestamp failed |
 | `check` | Evaluate a single hypothetical call against a policy. | `0` allow, `1` deny, `2` ask |
 | `explain` | Human-readable policy summary for a reviewer. | `0` |
+| `drift` | Compare one run against the runs before it. See [Drift](#drift). | `0` normal or too little history, `1` drift or a broken chain |
 
 `check` exists for CI. A policy is a security control, so regressions in it should break the build:
 
@@ -764,6 +766,26 @@ openssl ts -verify -digest <head> -token_in -in token.der -CAfile roots.pem
 where `token.der` is the base64-decoded `timestamp.token` field. Programmatically: `requestTimestamp(head, { tsa })` and `verifyTimestamp(token, head)`.
 
 ---
+
+## Drift
+
+A budget catches a run that crosses a line drawn in advance. It cannot catch a run that is strange but stays under the line: ceilings are set for the busiest legitimate day, and a hijacked agent that keeps below them passes.
+
+`toolwrit drift` compares one run against the runs before it. Give it the audit logs oldest first, one file per run:
+
+```
+$ toolwrit drift mon.jsonl tue.jsonl wed.jsonl thu.jsonl
+DRIFT: run thu is unlike the 3 runs before it
+  - calls 263 against a usual 20
+  - denied 3 against a usual 0
+  - fs.read called 260 times against a usual 20
+  - net.upload was called 2 time(s); no earlier run called it
+  - shell.exec was called 1 time(s); no earlier run called it
+```
+
+It flags calls, denials, bytes and spend more than `--factor` (default 3) times their median over earlier runs, any single tool called that much more often than usual, and any tool no earlier run ever called, even when that call was denied. Small absolute rises are ignored, so going from zero denials to one does not page anyone. With fewer than three earlier runs it gives no verdict. Every file's chain is verified first; a broken one fails the command instead of being compared.
+
+It reads finished logs and decides nothing at call time, so run it from cron or CI and page someone on exit `1`. It also has limits. A run that makes the usual number of the usual calls with a different intent does not drift, and anything that never crosses the tool boundary is invisible to it. `detectDrift(entries)` is exported for use in code.
 
 ## What Toolwrit is not
 

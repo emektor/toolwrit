@@ -40,6 +40,8 @@ export type { AuditEntry, AuditLogOptions } from './audit/chain.js';
 export { verifyChain, verifyFile } from './audit/verify.js';
 export type { VerifyResult } from './audit/verify.js';
 export { summarize, verifyAgainstReceipt } from './audit/receipt.js';
+export { detectDrift, profileRuns } from './audit/drift.js';
+export type { DriftFinding, DriftOptions, DriftReport, RunProfile } from './audit/drift.js';
 export { DEFAULT_TSA, requestTimestamp, verifyTimestamp } from './audit/timestamp.js';
 export type {
   ReceiptTimestamp,

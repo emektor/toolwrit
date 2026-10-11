@@ -178,6 +178,7 @@ The same ordering limitation applies: a result's size is unknowable before the t
 | Anthropic / OpenAI SDK adapters | yes | **no** |
 | Run receipts (`summarize`, `verifyAgainstReceipt`) | yes | **no** |
 | `toolwrit receipt` / `toolwrit anchor` / `verify --against` | yes | **no** |
+| Drift (`detectDrift`, `toolwrit drift`) | yes | **no** |
 
 `toolwrit run` exits 1 and says so:
 

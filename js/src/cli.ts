@@ -29,6 +29,7 @@ import {
   type ReceiptTimestamp,
 } from './audit/timestamp.js';
 import { verifyChain, verifyFile, type VerifyResult } from './audit/verify.js';
+import { detectDrift } from './audit/drift.js';
 import { Toolwrit } from './toolwrit.js';
 import { loadPolicyFile } from './policy/load.js';
 import type { ArgConstraint, Decision, Policy } from './types.js';
@@ -40,6 +41,7 @@ Usage:
   toolwrit verify  <audit.jsonl> [--against <anchor.jsonl> [--require-timestamp] [--max-lag <seconds>]]
   toolwrit receipt <audit.jsonl> [--json]
   toolwrit anchor  <audit.jsonl> --to <anchor.jsonl> [--tsa [url]]
+  toolwrit drift   <audit.jsonl>... [--run <id>] [--factor <n>] [--json]
   toolwrit check   --policy <file> --tool <name> [--args <json>]
   toolwrit explain --policy <file>
 
@@ -56,6 +58,9 @@ Options:
                Fail the anchor check when the receipt carries no timestamp.
   --max-lag    Fail when the timestamp is more than this many seconds after
                the run's last entry.
+  --run        drift: the run to examine (default: the last one in the log).
+  --factor     drift: report a figure above this multiple of its usual
+               value (default 3).
 
 Anchoring:
   A chain verifies against itself, so a truncated log still passes: a prefix of
@@ -78,6 +83,16 @@ Exit codes:
   anchor   0 when the receipt was appended, 1 when the chain does not verify
            or the timestamp could not be obtained.
   check    0 allow, 1 deny, 2 ask.
+  drift    0 when the run looks like its history (or there is too little
+           history to judge), 1 when it does not or the chain is broken.
+
+Drift:
+  Budgets catch a run that crosses a line drawn in advance. Drift catches a
+  run that is unlike the runs before it in the same log -- far more calls,
+  denials, bytes or spend than usual, or a tool no earlier run ever called --
+  even when it stays under every ceiling. Give it the logs oldest first, one
+  file per run (each run starts its own chain); the last run is examined
+  unless --run names another. Run it from cron or CI and page someone on exit 1.
 `;
 
 interface ParsedArgs {
@@ -162,6 +177,8 @@ function main(): void | Promise<void> {
       return cmdCheck(parsed);
     case 'explain':
       return cmdExplain(parsed);
+    case 'drift':
+      return cmdDrift(parsed);
     default:
       throw new CliError(`unknown subcommand "${subcommand ?? ''}"\n\n${USAGE}`);
   }
@@ -373,6 +390,58 @@ function cmdReceipt(parsed: ParsedArgs): void {
   // A receipt over a broken chain is still worth printing — it says what the
   // file claims — but it must not exit 0, or a CI step would accept it.
   if (!receipt.chainOk) process.exitCode = 1;
+}
+
+function cmdDrift(parsed: ParsedArgs): void {
+  const files = parsed.positional.slice(1);
+  if (files.length === 0) {
+    throw new CliError('drift needs audit files, oldest first, e.g. `toolwrit drift mon.jsonl tue.jsonl wed.jsonl thu.jsonl`');
+  }
+
+  const factorFlag = parsed.flags.get('factor');
+  const factor = factorFlag === undefined ? undefined : Number(factorFlag);
+  if (factor !== undefined && !(factor > 1)) throw new CliError(`--factor must be a number above 1, got "${factorFlag}"`);
+  const run = parsed.flags.get('run');
+
+  // Comparing a run against a history someone may have edited would launder
+  // the edit into a clean verdict, so any broken chain is reported and fails.
+  const entries: AuditEntry[] = [];
+  for (const file of files) {
+    const own = readEntries(file);
+    const chain = verifyChain(own);
+    if (!chain.ok) {
+      reportFailure(`audit chain in ${file} is not intact; drift was not computed`, chain);
+      process.exitCode = 1;
+      return;
+    }
+    entries.push(...own);
+  }
+
+  let report;
+  try {
+    report = detectDrift(entries, { ...(run ? { run } : {}), ...(factor ? { factor } : {}) });
+  } catch (err) {
+    throw new CliError((err as Error).message);
+  }
+
+  if (parsed.flags.get('json') !== undefined) {
+    process.stdout.write(`${JSON.stringify(report)}
+`);
+  } else if (!report.judged) {
+    process.stdout.write(
+      `ok: run ${report.run} not judged, only ${report.baselineRuns.length} earlier run(s) in the log
+`
+    );
+  } else if (report.findings.length === 0) {
+    process.stdout.write(`ok: run ${report.run} looks like the ${report.baselineRuns.length} runs before it
+`);
+  } else {
+    process.stdout.write(`DRIFT: run ${report.run} is unlike the ${report.baselineRuns.length} runs before it
+`);
+    for (const f of report.findings) process.stdout.write(`  - ${f.message}
+`);
+  }
+  if (report.findings.length > 0) process.exitCode = 1;
 }
 
 async function cmdAnchor(parsed: ParsedArgs): Promise<void> {
