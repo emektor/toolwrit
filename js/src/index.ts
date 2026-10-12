@@ -49,6 +49,8 @@ export type {
   TimestampCheck,
   VerifyTimestampOptions,
 } from './audit/timestamp.js';
+export { checkFileStamp, checkStampDigest, hashFile, stampFile } from './audit/stamp.js';
+export type { FileStamp, StampCheck } from './audit/stamp.js';
 export type { ReceiptConsumed, ReceiptPlan, ReceiptWarning, RunReceipt } from './audit/receipt.js';
 
 export type {

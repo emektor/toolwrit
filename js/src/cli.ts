@@ -15,7 +15,7 @@
  */
 
 import { X509Certificate } from 'node:crypto';
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { rootCertificates } from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -30,6 +30,7 @@ import {
 } from './audit/timestamp.js';
 import { verifyChain, verifyFile, type VerifyResult } from './audit/verify.js';
 import { detectDrift } from './audit/drift.js';
+import { checkFileStamp, stampFile, type FileStamp } from './audit/stamp.js';
 import { Toolwrit } from './toolwrit.js';
 import { loadPolicyFile } from './policy/load.js';
 import type { ArgConstraint, Decision, Policy } from './types.js';
@@ -42,6 +43,7 @@ Usage:
   toolwrit receipt <audit.jsonl> [--json]
   toolwrit anchor  <audit.jsonl> --to <anchor.jsonl> [--tsa [url]]
   toolwrit drift   <audit.jsonl>... [--run <id>] [--factor <n>] [--json]
+  toolwrit stamp   <file>... [--tsa <url>] [--check]
   toolwrit check   --policy <file> --tool <name> [--args <json>]
   toolwrit explain --policy <file>
 
@@ -61,6 +63,8 @@ Options:
   --run        drift: the run to examine (default: the last one in the log).
   --factor     drift: report a figure above this multiple of its usual
                value (default 3).
+  --check      stamp: verify each file against its <file>.stamp.json instead
+               of stamping it.
 
 Anchoring:
   A chain verifies against itself, so a truncated log still passes: a prefix of
@@ -76,6 +80,12 @@ Anchoring:
   rewritten later can only be timestamped later, and "verify --against" shows
   how long after the run's last entry that was.
 
+Stamping files:
+  "toolwrit stamp video.mp4" sends the file's SHA-256 (never the file) to a
+  Time-Stamp Authority and writes video.mp4.stamp.json beside it: proof that
+  exactly these bytes existed no later than the TSA's time. "--check" later
+  re-hashes the file and verifies the stamp; any changed byte fails.
+
 Exit codes:
   run      0 when the downstream server exits cleanly.
   verify   0 when every requested check passes, 1 when any fails.
@@ -83,6 +93,7 @@ Exit codes:
   anchor   0 when the receipt was appended, 1 when the chain does not verify
            or the timestamp could not be obtained.
   check    0 allow, 1 deny, 2 ask.
+  stamp    0 when every file was stamped (or, with --check, verified), 1 otherwise.
   drift    0 when the run looks like its history (or there is too little
            history to judge), 1 when it does not or the chain is broken.
 
@@ -109,7 +120,7 @@ interface ParsedArgs {
  * never be interpreted, or a server's own `--policy` flag would be stolen.
  */
 /** Flags that are on/off switches and therefore never consume the next token. */
-const BOOLEAN_FLAGS = new Set(['json', 'help', 'version', 'require-timestamp']);
+const BOOLEAN_FLAGS = new Set(['json', 'help', 'version', 'require-timestamp', 'check']);
 
 function parseArgs(argv: readonly string[]): ParsedArgs {
   const flags = new Map<string, string>();
@@ -179,6 +190,8 @@ function main(): void | Promise<void> {
       return cmdExplain(parsed);
     case 'drift':
       return cmdDrift(parsed);
+    case 'stamp':
+      return cmdStamp(parsed);
     default:
       throw new CliError(`unknown subcommand "${subcommand ?? ''}"\n\n${USAGE}`);
   }
@@ -489,6 +502,47 @@ async function cmdAnchor(parsed: ParsedArgs): Promise<void> {
     process.stdout.write(`timestamped by ${line.timestamp.tsa} at ${line.timestamp.time}\n`);
   } else {
     process.stdout.write('note: an anchor only proves anything where the agent cannot rewrite it.\n');
+  }
+}
+
+async function cmdStamp(parsed: ParsedArgs): Promise<void> {
+  const tsaFlag = parsed.flags.get('tsa');
+  const tsa = tsaFlag === undefined || tsaFlag === 'true' ? DEFAULT_TSA : tsaFlag;
+  if (!/^https?:\/\//.test(tsa)) throw new CliError(`--tsa takes a URL, got "${tsa}"`);
+
+  const files = parsed.positional.slice(1);
+  if (files.length === 0) throw new CliError('stamp needs at least one file, e.g. `toolwrit stamp video.mp4`');
+  const check = parsed.flags.has('check');
+  const roots = trustedRoots(parsed);
+
+  // Each file is reported on its own line and a failure does not stop the
+  // rest: stamping a folder of renders should not hinge on the first one.
+  for (const file of files) {
+    const stampPath = `${file}.stamp.json`;
+    try {
+      if (check) {
+        let stamp: FileStamp;
+        try {
+          stamp = JSON.parse(readFileSync(stampPath, 'utf8')) as FileStamp;
+        } catch (err) {
+          throw new Error(`cannot read ${stampPath} (${(err as Error).message})`);
+        }
+        const result = await checkFileStamp(file, stamp, { roots });
+        if (!result.ok || !result.time) throw new Error(result.failure ?? 'stamp does not verify');
+        process.stdout.write(`ok: ${file} — ${result.signer} vouches it existed at ${result.time.toISOString()}
+`);
+      } else {
+        const stamp = await stampFile(file, { tsa, roots });
+        writeFileSync(stampPath, `${JSON.stringify(stamp, null, 2)}
+`, 'utf8');
+        process.stdout.write(`stamped ${file} (sha256 ${stamp.sha256}) at ${stamp.time} → ${stampPath}
+`);
+      }
+    } catch (err) {
+      process.stderr.write(`FAILED: ${file} — ${(err as Error).message}
+`);
+      process.exitCode = 1;
+    }
   }
 }
 
