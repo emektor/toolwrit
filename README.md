@@ -150,6 +150,7 @@ toolwrit anchor  <audit.jsonl> --to <anchor.jsonl> [--tsa [url]] [--tsa-ca <root
 toolwrit check   --policy <file> --tool <name> [--args <json>]
 toolwrit explain --policy <file>
 toolwrit drift   <audit.jsonl>... [--run <id>] [--factor <n>] [--json]
+toolwrit stamp   <file>... [--out <dir>] [--tsa <url>] [--check]
 ```
 
 | Command | Purpose | Exit codes |
@@ -161,6 +162,7 @@ toolwrit drift   <audit.jsonl>... [--run <id>] [--factor <n>] [--json]
 | `check` | Evaluate a single hypothetical call against a policy. | `0` allow, `1` deny, `2` ask |
 | `explain` | Human-readable policy summary for a reviewer. | `0` |
 | `drift` | Compare one run against the runs before it. See [Drift](#drift). | `0` normal or too little history, `1` drift or a broken chain |
+| `stamp` | Timestamp any file, or with `--check` verify it still matches its stamp. See [Stamping files](#stamping-files). | `0` every file stamped or verified, `1` any failed |
 
 `check` exists for CI. A policy is a security control, so regressions in it should break the build:
 
@@ -764,6 +766,22 @@ openssl ts -verify -digest <head> -token_in -in token.der -CAfile roots.pem
 ```
 
 where `token.der` is the base64-decoded `timestamp.token` field. Programmatically: `requestTimestamp(head, { tsa })` and `verifyTimestamp(token, head)`.
+
+### Stamping files
+
+The same timestamp works for any file, not just a receipt. `toolwrit stamp` hashes the file, sends only the SHA-256 to the TSA, and writes the signed token next to it:
+
+```
+toolwrit stamp render.mp4
+stamped render.mp4 (sha256 6e14cf36…) at 2026-10-12T22:53:03.000Z → render.mp4.stamp.json
+
+toolwrit stamp render.mp4 --check
+ok: render.mp4 — DigiCert SHA256 RSA4096 Timestamp Responder 2026 1 vouches it existed at 2026-10-12T22:53:03.000Z
+```
+
+The stamp proves these exact bytes existed no later than the signed time: an agent's output, a design, a contract, a video before it was re-uploaded by someone else. One changed byte and `--check` fails. The file never leaves the machine and large files are hashed as a stream. `--out <dir>` keeps the stamps in one folder instead of beside each file. Programmatically: `stampFile(path)` and `checkFileStamp(path, stamp)`.
+
+A public TSA's timestamp is strong technical evidence, not a *qualified* electronic timestamp in the eIDAS sense. Where a court must presume it valid without further proof, point `--tsa` at a qualified, usually paid, TSA.
 
 ---
 

@@ -18,7 +18,7 @@ import { X509Certificate } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { rootCertificates } from 'node:tls';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { createMcpProxy } from './adapters/mcp-proxy.js';
 import type { AuditEntry } from './audit/chain.js';
 import { summarize, verifyAgainstReceipt, type RunReceipt } from './audit/receipt.js';
@@ -43,7 +43,7 @@ Usage:
   toolwrit receipt <audit.jsonl> [--json]
   toolwrit anchor  <audit.jsonl> --to <anchor.jsonl> [--tsa [url]]
   toolwrit drift   <audit.jsonl>... [--run <id>] [--factor <n>] [--json]
-  toolwrit stamp   <file>... [--tsa <url>] [--check]
+  toolwrit stamp   <file>... [--out <dir>] [--tsa <url>] [--check]
   toolwrit check   --policy <file> --tool <name> [--args <json>]
   toolwrit explain --policy <file>
 
@@ -65,6 +65,8 @@ Options:
                value (default 3).
   --check      stamp: verify each file against its <file>.stamp.json instead
                of stamping it.
+  --out        stamp: keep the .stamp.json files in this folder instead of
+               beside each file.
 
 Anchoring:
   A chain verifies against itself, so a truncated log still passes: a prefix of
@@ -514,11 +516,13 @@ async function cmdStamp(parsed: ParsedArgs): Promise<void> {
   if (files.length === 0) throw new CliError('stamp needs at least one file, e.g. `toolwrit stamp video.mp4`');
   const check = parsed.flags.has('check');
   const roots = trustedRoots(parsed);
+  const outFlag = parsed.flags.get('out');
+  if (outFlag === 'true') throw new CliError('--out needs a folder');
 
   // Each file is reported on its own line and a failure does not stop the
   // rest: stamping a folder of renders should not hinge on the first one.
   for (const file of files) {
-    const stampPath = `${file}.stamp.json`;
+    const stampPath = outFlag === undefined ? `${file}.stamp.json` : join(outFlag, `${basename(file)}.stamp.json`);
     try {
       if (check) {
         let stamp: FileStamp;
@@ -533,6 +537,7 @@ async function cmdStamp(parsed: ParsedArgs): Promise<void> {
 `);
       } else {
         const stamp = await stampFile(file, { tsa, roots });
+        mkdirSync(dirname(stampPath), { recursive: true });
         writeFileSync(stampPath, `${JSON.stringify(stamp, null, 2)}
 `, 'utf8');
         process.stdout.write(`stamped ${file} (sha256 ${stamp.sha256}) at ${stamp.time} → ${stampPath}
